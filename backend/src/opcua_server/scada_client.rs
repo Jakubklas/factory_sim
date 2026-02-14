@@ -6,7 +6,7 @@ use std::str::FromStr;
 use crate::simulator::plant::{PlantState, DeviceState};
 use crate::simulator::devices::{Boiler, BoilerStatus, PressureMeter, MeterStatus, FlowMeter, FlowMeterStatus, Valve, ValveMode, ValveStatus};
 use std::collections::HashMap;
-use crate::models::{PlcConfig, DeviceType};
+use crate::models::PlcConfig;
 
 pub async fn start_scada_client(
     tx: broadcast::Sender<PlantState>,
@@ -97,8 +97,8 @@ async fn read_plc_data(
         }
 
         // Construct DeviceState based on device type
-        let device_state = match &device_mapping.device_type {
-            DeviceType::Boiler => {
+        let device_state = match device_mapping.device_type.as_str() {
+            "Boiler" => {
                 let boiler = Boiler {
                     id: device_mapping.device_id.clone(),
                     temperature: metric_values.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.0),
@@ -111,7 +111,7 @@ async fn read_plc_data(
                 };
                 DeviceState::Boiler(boiler)
             }
-            DeviceType::PressureMeter => {
+            "PressureMeter" => {
                 let meter = PressureMeter {
                     id: device_mapping.device_id.clone(),
                     pressure: metric_values.get("pressure").and_then(|v| v.as_f64()).unwrap_or(0.0),
@@ -122,7 +122,7 @@ async fn read_plc_data(
                 };
                 DeviceState::PressureMeter(meter)
             }
-            DeviceType::FlowMeter => {
+            "FlowMeter" => {
                 let meter = FlowMeter {
                     id: device_mapping.device_id.clone(),
                     flow_rate: metric_values.get("flow_rate").and_then(|v| v.as_f64()).unwrap_or(0.0),
@@ -134,7 +134,7 @@ async fn read_plc_data(
                 };
                 DeviceState::FlowMeter(meter)
             }
-            DeviceType::Valve => {
+            "Valve" => {
                 let valve = Valve {
                     id: device_mapping.device_id.clone(),
                     position: metric_values.get("position").and_then(|v| v.as_f64()).unwrap_or(0.0),
@@ -148,6 +148,10 @@ async fn read_plc_data(
                         .unwrap_or(ValveStatus::Partial),
                 };
                 DeviceState::Valve(valve)
+            }
+            unknown => {
+                tracing::warn!("Unknown device type: {}", unknown);
+                continue;
             }
         };
 

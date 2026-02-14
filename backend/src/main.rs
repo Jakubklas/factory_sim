@@ -8,13 +8,13 @@ use tokio::sync::{broadcast, RwLock};
 use std::sync::Arc;
 use std::time::Duration;
 use std::collections::HashMap;
-use models::PlantConfig;
-use opcua_server::plc_server::DeviceHandle;
+use models::{PlantConfig, DeviceHandle};
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
+    eprintln!("DEBUG: main() started");
     tracing::info!("Starting Water Plant Digital Twin with OPC UA Architecture");
 
     // Create broadcast channel for plant state updates
@@ -127,7 +127,9 @@ async fn main() {
         }
 
         let config = plc_config.clone();
+        tracing::info!("Spawning PLC server task for {}", config.name);
         let plc_task = tokio::spawn(async move {
+            tracing::info!("PLC server task starting for {}", config.name);
             if let Err(e) = opcua_server::plc_server::start_plc_server(config.clone(), devices).await {
                 tracing::error!("{} server error: {}", config.name, e);
             }

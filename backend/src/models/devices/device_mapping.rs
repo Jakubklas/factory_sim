@@ -4,15 +4,9 @@ use super::metrics::MetricConfig;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceMapping {
     pub device_id: String,
-    pub device_type: DeviceType,
+    /// Device type as string - must match a device_type in available_devices.json
+    pub device_type: String,
     pub folder_name: String,
     pub metrics: Vec<MetricConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum DeviceType {
-    Boiler,
-    PressureMeter,
-    FlowMeter,
-    Valve,
-}

@@ -1,4 +1,10 @@
 use serde::{Deserialize, Serialize};
+use crate::models::DeviceFieldValue;
+
+/// Trait for devices to expose their fields dynamically
+pub trait DeviceFields {
+    fn get_field(&self, field_name: &str) -> Option<DeviceFieldValue>;
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -58,6 +64,18 @@ impl Boiler {
     }
 }
 
+impl DeviceFields for Boiler {
+    fn get_field(&self, field_name: &str) -> Option<DeviceFieldValue> {
+        match field_name {
+            "temperature" => Some(DeviceFieldValue::Float(self.temperature)),
+            "target_temperature" => Some(DeviceFieldValue::Float(self.target_temperature)),
+            "pressure" => Some(DeviceFieldValue::Float(self.pressure)),
+            "status" => Some(DeviceFieldValue::String(format!("{:?}", self.status))),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub enum MeterStatus {
@@ -94,6 +112,16 @@ impl PressureMeter {
             self.status = MeterStatus::Warning;
         } else {
             self.status = MeterStatus::Normal;
+        }
+    }
+}
+
+impl DeviceFields for PressureMeter {
+    fn get_field(&self, field_name: &str) -> Option<DeviceFieldValue> {
+        match field_name {
+            "pressure" => Some(DeviceFieldValue::Float(self.pressure)),
+            "status" => Some(DeviceFieldValue::String(format!("{:?}", self.status))),
+            _ => None,
         }
     }
 }
@@ -137,6 +165,17 @@ impl FlowMeter {
             self.status = FlowMeterStatus::Low;
         } else {
             self.status = FlowMeterStatus::Normal;
+        }
+    }
+}
+
+impl DeviceFields for FlowMeter {
+    fn get_field(&self, field_name: &str) -> Option<DeviceFieldValue> {
+        match field_name {
+            "flow_rate" => Some(DeviceFieldValue::Float(self.flow_rate)),
+            "total_volume" => Some(DeviceFieldValue::Float(self.total_volume)),
+            "status" => Some(DeviceFieldValue::String(format!("{:?}", self.status))),
+            _ => None,
         }
     }
 }
@@ -196,5 +235,16 @@ impl Valve {
         } else {
             ValveStatus::Partial
         };
+    }
+}
+
+impl DeviceFields for Valve {
+    fn get_field(&self, field_name: &str) -> Option<DeviceFieldValue> {
+        match field_name {
+            "position" => Some(DeviceFieldValue::Float(self.position)),
+            "mode" => Some(DeviceFieldValue::String(format!("{:?}", self.mode))),
+            "status" => Some(DeviceFieldValue::String(format!("{:?}", self.status))),
+            _ => None,
+        }
     }
 }

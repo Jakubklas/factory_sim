@@ -96,19 +96,36 @@ async fn main() {
     });
 
     // Load factory configuration from JSON
-    let plant_config = PlantConfig::from_json("config/factory.json")
-        .expect("Failed to load factory configuration");
+    eprintln!("DEBUG: Loading config from config/factory.json");
+    let plant_config = match PlantConfig::from_json("config/factory.json") {
+        Ok(config) => {
+            eprintln!("DEBUG: Config loaded successfully");
+            config
+        }
+        Err(e) => {
+            eprintln!("ERROR: Failed to load factory configuration: {}", e);
+            eprintln!("Current directory: {:?}", std::env::current_dir());
+            panic!("Failed to load factory configuration: {}", e);
+        }
+    };
 
+    eprintln!("DEBUG: About to log PLC count");
     tracing::info!("Loaded configuration for {} PLCs", plant_config.plcs.len());
+    eprintln!("DEBUG: Logged PLC count");
 
     // Start PLC servers dynamically based on configuration
     let mut plc_tasks = Vec::new();
 
-    for plc_config in &plant_config.plcs {
+    eprintln!("DEBUG: Starting PLC server loop");
+    eprintln!("DEBUG: plant_config.plcs.len() = {}", plant_config.plcs.len());
+    for (idx, plc_config) in plant_config.plcs.iter().enumerate() {
+        eprintln!("DEBUG: Processing PLC #{}: {}", idx, plc_config.name);
         let mut devices = HashMap::new();
 
         // Map device IDs to DeviceHandles
+        eprintln!("DEBUG: Mapping {} devices for {}", plc_config.device_mappings.len(), plc_config.name);
         for device_mapping in &plc_config.device_mappings {
+            eprintln!("DEBUG: Mapping device: {}", device_mapping.device_id);
             let handle = match device_mapping.device_id.as_str() {
                 "boiler-1" => Some(DeviceHandle::Boiler(boiler1.clone())),
                 "boiler-2" => Some(DeviceHandle::Boiler(boiler2.clone())),
@@ -126,7 +143,9 @@ async fn main() {
             }
         }
 
+        eprintln!("DEBUG: Device mapping complete for {}. Creating tokio task...", plc_config.name);
         let config = plc_config.clone();
+        eprintln!("DEBUG: About to spawn PLC server task for {}", config.name);
         tracing::info!("Spawning PLC server task for {}", config.name);
         let plc_task = tokio::spawn(async move {
             tracing::info!("PLC server task starting for {}", config.name);
@@ -136,18 +155,25 @@ async fn main() {
         });
 
         plc_tasks.push(plc_task);
+        eprintln!("DEBUG: PLC task pushed to plc_tasks vector");
     }
 
-    // Wait a bit for PLC servers to start
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    eprintln!("DEBUG: Exited PLC server loop. Total PLC tasks: {}", plc_tasks.len());
+
+    // Wait for PLC servers to start - they run in std::thread so need time to initialize
+    eprintln!("DEBUG: About to sleep for 10 seconds to let PLC servers initialize");
+    tracing::info!("Waiting for PLC servers to initialize...");
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    eprintln!("DEBUG: Finished sleeping");
+    tracing::info!("PLC servers should be ready now");
 
     // Start SCADA client (connects to all PLCs and aggregates data)
+    // SCADA client runs in its own thread, so we don't need to await it
     let configs_for_scada = plant_config.plcs.clone();
-    let scada_client = tokio::spawn(async move {
-        if let Err(e) = opcua_server::start_scada_client(tx_scada, configs_for_scada).await {
-            tracing::error!("SCADA client error: {}", e);
-        }
-    });
+    if let Err(e) = opcua_server::start_scada_client(tx_scada, configs_for_scada).await {
+        tracing::error!("SCADA client error: {}", e);
+    }
+    eprintln!("DEBUG: SCADA client started");
 
     tracing::info!("Backend initialized:");
     for plc_config in &plant_config.plcs {
@@ -166,9 +192,6 @@ async fn main() {
         }
         _ = simulation => {
             tracing::info!("Simulation terminated");
-        }
-        _ = scada_client => {
-            tracing::info!("SCADA client terminated");
         }
     }
 

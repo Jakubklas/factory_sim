@@ -14,8 +14,21 @@ pub async fn start_scada_client(
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Starting SCADA Client - connecting to {} PLCs", configs.len());
 
+    // Spawn SCADA client in a separate thread to avoid runtime conflicts
+    std::thread::spawn(move || {
+        run_scada_client_sync(tx, configs);
+    });
+
+    Ok(())
+}
+
+fn run_scada_client_sync(
+    tx: broadcast::Sender<PlantState>,
+    configs: Vec<PlcConfig>,
+) {
     // Create clients and sessions dynamically for each PLC
     let mut sessions = Vec::new();
+    let mut _clients = Vec::new(); // Keep clients alive to avoid dropping runtime
 
     for config in &configs {
         let mut client = ClientBuilder::new()
@@ -27,7 +40,7 @@ pub async fn start_scada_client(
             .client()
             .unwrap();
 
-        let session = client.connect_to_endpoint(
+        match client.connect_to_endpoint(
             (
                 config.endpoint.as_str(),
                 SecurityPolicy::None.to_str(),
@@ -35,40 +48,48 @@ pub async fn start_scada_client(
                 UserTokenPolicy::anonymous(),
             ),
             IdentityToken::Anonymous,
-        )?;
-
-        sessions.push((config.clone(), session));
-        tracing::info!("SCADA connected to {}", config.name);
-    }
-
-    // Polling loop to read values from all PLCs
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
-
-        loop {
-            interval.tick().await;
-
-            let mut all_devices = HashMap::new();
-
-            // Read from each PLC
-            for (config, session) in &sessions {
-                if let Ok(devices) = read_plc_data(session, config).await {
-                    all_devices.extend(devices);
-                }
+        ) {
+            Ok(session) => {
+                sessions.push((config.clone(), session));
+                _clients.push(client); // Keep client alive
+                tracing::info!("SCADA connected to {}", config.name);
             }
-
-            // Send aggregated data
-            if !all_devices.is_empty() {
-                let plant_state = PlantState { devices: all_devices };
-                let _ = tx.send(plant_state);
+            Err(e) => {
+                tracing::error!("Failed to connect SCADA to {}: {}", config.name, e);
+                continue;
             }
         }
-    });
+    }
 
-    Ok(())
+    if sessions.is_empty() {
+        tracing::warn!("SCADA client could not connect to any PLCs - will not publish data");
+        return;
+    }
+
+    tracing::info!("SCADA client successfully connected to {} PLC(s)", sessions.len());
+
+    // Polling loop to read values from all PLCs (synchronous loop in this thread)
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let mut all_devices = HashMap::new();
+
+        // Read from each PLC
+        for (config, session) in &sessions {
+            if let Ok(devices) = read_plc_data_sync(session, config) {
+                all_devices.extend(devices);
+            }
+        }
+
+        // Send aggregated data
+        if !all_devices.is_empty() {
+            let plant_state = PlantState { devices: all_devices };
+            let _ = tx.send(plant_state);
+        }
+    }
 }
 
-async fn read_plc_data(
+fn read_plc_data_sync(
     session: &Arc<RwLock<Session>>,
     config: &PlcConfig,
 ) -> Result<HashMap<String, DeviceState>, Box<dyn std::error::Error>> {
@@ -84,12 +105,12 @@ async fn read_plc_data(
 
             match &metric.data_type {
                 crate::models::DataType::Double => {
-                    if let Ok(value) = read_node_value(&session, &node_path).await {
+                    if let Ok(value) = read_node_value(&session, &node_path) {
                         metric_values.insert(metric.field_name.clone(), serde_json::json!(value));
                     }
                 }
                 crate::models::DataType::String => {
-                    if let Ok(value) = read_node_string(&session, &node_path).await {
+                    if let Ok(value) = read_node_string(&session, &node_path) {
                         metric_values.insert(metric.field_name.clone(), serde_json::json!(value));
                     }
                 }
@@ -161,7 +182,7 @@ async fn read_plc_data(
     Ok(devices)
 }
 
-async fn read_node_value(session: &Session, node_id: &str) -> Result<f64, Box<dyn std::error::Error>> {
+fn read_node_value(session: &Session, node_id: &str) -> Result<f64, Box<dyn std::error::Error>> {
     let node_id = NodeId::from_str(node_id)?;
     let read_result = session.read(&[ReadValueId::from(node_id)], TimestampsToReturn::Neither, 0.0)?;
 
@@ -176,7 +197,7 @@ async fn read_node_value(session: &Session, node_id: &str) -> Result<f64, Box<dy
     Err("Failed to read value".into())
 }
 
-async fn read_node_string(session: &Session, node_id: &str) -> Result<String, Box<dyn std::error::Error>> {
+fn read_node_string(session: &Session, node_id: &str) -> Result<String, Box<dyn std::error::Error>> {
     let node_id = NodeId::from_str(node_id)?;
     let read_result = session.read(&[ReadValueId::from(node_id)], TimestampsToReturn::Neither, 0.0)?;
 

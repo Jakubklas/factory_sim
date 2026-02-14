@@ -1,0 +1,28 @@
+# Rust
+backend/target/
+backend/Cargo.lock
+**/*.rs.bk
+
+# Node.js
+frontend/node_modules/
+frontend/dist/
+frontend/package-lock.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+.env.*.local

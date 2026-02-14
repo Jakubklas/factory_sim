@@ -1,0 +1,136 @@
+{
+  "name": "water-plant",
+  "plcs": [
+    {
+      "name": "PLC-1",
+      "uri": "urn:PLC1",
+      "port": 4840,
+      "endpoint": "opc.tcp://localhost:4840",
+      "device_mappings": [
+        {
+          "device_id": "boiler-1",
+          "device_type": "Boiler",
+          "folder_name": "Boiler1",
+          "metrics": [
+            {
+              "node_path": "Boiler1.Temperature",
+              "field_name": "temperature",
+              "data_type": "Double"
+            },
+            {
+              "node_path": "Boiler1.TargetTemperature",
+              "field_name": "target_temperature",
+              "data_type": "Double"
+            },
+            {
+              "node_path": "Boiler1.Pressure",
+              "field_name": "pressure",
+              "data_type": "Double"
+            },
+            {
+              "node_path": "Boiler1.Status",
+              "field_name": "status",
+              "data_type": "String"
+            }
+          ]
+        },
+        {
+          "device_id": "pressure-meter-1",
+          "device_type": "PressureMeter",
+          "folder_name": "PressureMeter1",
+          "metrics": [
+            {
+              "node_path": "PressureMeter1.Pressure",
+              "field_name": "pressure",
+              "data_type": "Double"
+            },
+            {
+              "node_path": "PressureMeter1.Status",
+              "field_name": "status",
+              "data_type": "String"
+            }
+          ]
+        },
+        {
+          "device_id": "valve-1",
+          "device_type": "Valve",
+          "folder_name": "Valve1",
+          "metrics": [
+            {
+              "node_path": "Valve1.Position",
+              "field_name": "position",
+              "data_type": "Double"
+            },
+            {
+              "node_path": "Valve1.Mode",
+              "field_name": "mode",
+              "data_type": "String"
+            },
+            {
+              "node_path": "Valve1.Status",
+              "field_name": "status",
+              "data_type": "String"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "PLC-2",
+      "uri": "urn:PLC2",
+      "port": 4841,
+      "endpoint": "opc.tcp://localhost:4841",
+      "device_mappings": [
+        {
+          "device_id": "boiler-2",
+          "device_type": "Boiler",
+          "folder_name": "Boiler2",
+          "metrics": [
+            {
+              "node_path": "Boiler2.Temperature",
+              "field_name": "temperature",
+              "data_type": "Double"
+            },
+            {
+              "node_path": "Boiler2.TargetTemperature",
+              "field_name": "target_temperature",
+              "data_type": "Double"
+            },
+            {
+              "node_path": "Boiler2.Pressure",
+              "field_name": "pressure",
+              "data_type": "Double"
+            },
+            {
+              "node_path": "Boiler2.Status",
+              "field_name": "status",
+              "data_type": "String"
+            }
+          ]
+        },
+        {
+          "device_id": "flow-meter-1",
+          "device_type": "FlowMeter",
+          "folder_name": "FlowMeter1",
+          "metrics": [
+            {
+              "node_path": "FlowMeter1.FlowRate",
+              "field_name": "flow_rate",
+              "data_type": "Double"
+            },
+            {
+              "node_path": "FlowMeter1.TotalVolume",
+              "field_name": "total_volume",
+              "data_type": "Double"
+            },
+            {
+              "node_path": "FlowMeter1.Status",
+              "field_name": "status",
+              "data_type": "String"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

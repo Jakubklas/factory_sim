@@ -8,7 +8,7 @@ use tokio::sync::{broadcast, RwLock};
 use std::sync::Arc;
 use std::time::Duration;
 use std::collections::HashMap;
-use models::{PlantConfig, DeviceHandle};
+use models::{PlantConfig, DeviceHandle, DeviceSchemaRegistry, DeviceConfigRegistry, Topology};
 
 #[tokio::main]
 async fn main() {
@@ -22,16 +22,83 @@ async fn main() {
     let tx_ws = tx.clone();
     let tx_scada = tx.clone();
 
-    // Create plant with Arc<RwLock> for shared access
-    let plant = Arc::new(RwLock::new(Plant::new()));
+    // Load device schemas, device configs, and topology
+    eprintln!("DEBUG: Loading device schemas from config/available_devices.json");
+    let schema_registry = match DeviceSchemaRegistry::from_json("config/available_devices.json") {
+        Ok(registry) => registry,
+        Err(e) => {
+            eprintln!("ERROR: Failed to load device schemas: {}", e);
+            panic!("Failed to load device schemas: {}", e);
+        }
+    };
 
-    // Get references to individual devices for PLC servers
-    let plant_clone = plant.clone();
+    eprintln!("DEBUG: Loading device configs from config/devices.json");
+    let device_configs = match DeviceConfigRegistry::from_json("config/devices.json") {
+        Ok(registry) => registry,
+        Err(e) => {
+            eprintln!("ERROR: Failed to load device configs: {}", e);
+            panic!("Failed to load device configs: {}", e);
+        }
+    };
+
+    eprintln!("DEBUG: Loading topology from config/topology.json");
+    let topology = match Topology::from_json("config/topology.json") {
+        Ok(topology) => topology,
+        Err(e) => {
+            eprintln!("ERROR: Failed to load topology: {}", e);
+            panic!("Failed to load topology: {}", e);
+        }
+    };
+
+    // Create plant from configuration
+    eprintln!("DEBUG: Creating plant from configuration");
+    let plant = match Plant::from_config(device_configs.devices, topology, &schema_registry) {
+        Ok(plant) => Arc::new(RwLock::new(plant)),
+        Err(e) => {
+            eprintln!("ERROR: Failed to create plant: {}", e);
+            panic!("Failed to create plant: {}", e);
+        }
+    };
+    eprintln!("DEBUG: Plant created successfully");
 
     // Start WebSocket server
     let ws_server = tokio::spawn(async move {
         if let Err(e) = ws_bridge::start_ws_server(tx_ws).await {
             tracing::error!("WebSocket server error: {}", e);
+        }
+    });
+
+    // Create device handles from plant state
+    eprintln!("DEBUG: Creating device handles");
+    let mut device_handles: HashMap<String, DeviceHandle> = {
+        let plant_state = plant.read().await.get_state();
+        plant_state
+            .devices
+            .into_iter()
+            .map(|(id, device)| {
+                let device_arc = Arc::new(RwLock::new(device));
+                (id, DeviceHandle::new(device_arc))
+            })
+            .collect()
+    };
+    eprintln!("DEBUG: Created {} device handles", device_handles.len());
+
+    // Clone device handles for sync task
+    let device_handles_sync = device_handles.clone();
+    let plant_sync = plant.clone();
+
+    // Spawn task to sync devices from plant to device handles
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(50));
+        loop {
+            interval.tick().await;
+            let plant = plant_sync.read().await;
+
+            for (device_id, handle) in &device_handles_sync {
+                if let Some(device) = plant.get_device(device_id) {
+                    *handle.get_device().write().await = device.clone();
+                }
+            }
         }
     });
 
@@ -48,50 +115,6 @@ async fn main() {
             // Update plant simulation (dt = 0.1 seconds)
             let mut plant = plant_sim.write().await;
             plant.tick(0.1);
-        }
-    });
-
-    // Create Arc<RwLock> wrappers for each device
-    let boiler1 = Arc::new(RwLock::new({
-        let plant = plant.read().await;
-        plant.boiler_1.clone()
-    }));
-    let boiler2 = Arc::new(RwLock::new({
-        let plant = plant.read().await;
-        plant.boiler_2.clone()
-    }));
-    let pressure_meter1 = Arc::new(RwLock::new({
-        let plant = plant.read().await;
-        plant.pressure_meter_1.clone()
-    }));
-    let valve1 = Arc::new(RwLock::new({
-        let plant = plant.read().await;
-        plant.valve_1.clone()
-    }));
-    let flow_meter1 = Arc::new(RwLock::new({
-        let plant = plant.read().await;
-        plant.flow_meter_1.clone()
-    }));
-
-    // Spawn task to sync devices from plant to individual Arc<RwLock> refs
-    let plant_sync = plant.clone();
-    let b1_sync = boiler1.clone();
-    let b2_sync = boiler2.clone();
-    let pm1_sync = pressure_meter1.clone();
-    let v1_sync = valve1.clone();
-    let fm1_sync = flow_meter1.clone();
-
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_millis(50));
-        loop {
-            interval.tick().await;
-            let plant = plant_sync.read().await;
-
-            *b1_sync.write().await = plant.boiler_1.clone();
-            *b2_sync.write().await = plant.boiler_2.clone();
-            *pm1_sync.write().await = plant.pressure_meter_1.clone();
-            *v1_sync.write().await = plant.valve_1.clone();
-            *fm1_sync.write().await = plant.flow_meter_1.clone();
         }
     });
 
@@ -122,24 +145,14 @@ async fn main() {
         eprintln!("DEBUG: Processing PLC #{}: {}", idx, plc_config.name);
         let mut devices = HashMap::new();
 
-        // Map device IDs to DeviceHandles
+        // Map device IDs to DeviceHandles (now dynamic, no hardcoded match!)
         eprintln!("DEBUG: Mapping {} devices for {}", plc_config.device_mappings.len(), plc_config.name);
         for device_mapping in &plc_config.device_mappings {
             eprintln!("DEBUG: Mapping device: {}", device_mapping.device_id);
-            let handle = match device_mapping.device_id.as_str() {
-                "boiler-1" => Some(DeviceHandle::Boiler(boiler1.clone())),
-                "boiler-2" => Some(DeviceHandle::Boiler(boiler2.clone())),
-                "pressure-meter-1" => Some(DeviceHandle::PressureMeter(pressure_meter1.clone())),
-                "valve-1" => Some(DeviceHandle::Valve(valve1.clone())),
-                "flow-meter-1" => Some(DeviceHandle::FlowMeter(flow_meter1.clone())),
-                _ => {
-                    tracing::warn!("Unknown device ID: {}", device_mapping.device_id);
-                    None
-                }
-            };
-
-            if let Some(h) = handle {
-                devices.insert(device_mapping.device_id.clone(), h);
+            if let Some(handle) = device_handles.get(&device_mapping.device_id) {
+                devices.insert(device_mapping.device_id.clone(), handle.clone());
+            } else {
+                tracing::warn!("Device '{}' not found in plant", device_mapping.device_id);
             }
         }
 

@@ -1,0 +1,1 @@
+TODO: Re-enable OPC UA certificate generation in backend/src/opcua_server/plc_server.rs (currently disabled for development)

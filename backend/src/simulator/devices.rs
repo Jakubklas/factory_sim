@@ -1,5 +1,10 @@
 use serde::{Deserialize, Serialize};
 use crate::models::DeviceFieldValue;
+use crate::models::devices::{DeviceSchema, DataType};
+use super::physics_functions::{PhysicsFunction, PhysicsFunctionConfig, create_physics_function};
+use super::device_functions::{DeviceFunction, DeviceFunctionConfig, create_device_function};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Trait for devices to expose their fields dynamically
 pub trait DeviceFields {
@@ -246,5 +251,178 @@ impl DeviceFields for Valve {
             "status" => Some(DeviceFieldValue::String(format!("{:?}", self.status))),
             _ => None,
         }
+    }
+}
+
+// ============================================================================
+// GENERIC DEVICE ARCHITECTURE (Stream-Based)
+// ============================================================================
+
+/// Device categories inspired by stream processing (Flink-style)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceCategory {
+    Source,     // 0 inputs → N outputs (e.g., boiler, sensors)
+    Transform,  // N inputs → M outputs (e.g., valve, mixer)
+    Sink,       // N inputs → 0 outputs (e.g., display, logger)
+}
+
+/// Input port configuration - defines where data comes from
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputPort {
+    pub name: String,              // Port name (e.g., "upstream_pressure")
+    pub source_device_id: String,  // Which device provides this input
+    pub source_field: String,      // Which field from that device
+}
+
+/// Output port configuration - defines what data this device produces
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputPort {
+    pub name: String,         // Port name (e.g., "output_pressure")
+    pub target_field: String, // Internal field to write to
+}
+
+/// Generic device with flexible I/O and pluggable physics
+#[derive(Clone)]
+pub struct Device {
+    pub id: String,
+    pub device_type: String,
+    pub category: DeviceCategory,
+
+    // Dynamic field storage
+    fields: HashMap<String, DeviceFieldValue>,
+
+    // I/O configuration
+    input_ports: Vec<InputPort>,
+    output_ports: Vec<OutputPort>,
+
+    // Physics/logic (using Arc for clonability)
+    physics_function: Arc<dyn PhysicsFunction>,
+
+    // Control functions (using Arc for clonability)
+    functions: HashMap<String, Arc<dyn DeviceFunction>>,
+
+    // Schema reference (not serialized)
+    #[allow(dead_code)]
+    schema: Option<DeviceSchema>,
+}
+
+impl std::fmt::Debug for Device {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Device")
+            .field("id", &self.id)
+            .field("device_type", &self.device_type)
+            .field("category", &self.category)
+            .field("fields", &self.fields)
+            .field("input_ports", &self.input_ports)
+            .field("output_ports", &self.output_ports)
+            .field("physics_function", &"<dyn PhysicsFunction>")
+            .field("functions", &format!("{} functions", self.functions.len()))
+            .finish()
+    }
+}
+
+impl Device {
+    /// Create a new generic device from configuration
+    pub fn new(
+        id: String,
+        device_type: String,
+        category: DeviceCategory,
+        schema: DeviceSchema,
+        input_ports: Vec<InputPort>,
+        output_ports: Vec<OutputPort>,
+        physics_config: PhysicsFunctionConfig,
+        function_configs: Vec<(String, DeviceFunctionConfig)>,
+        initial_values: HashMap<String, DeviceFieldValue>,
+    ) -> Result<Self, String> {
+        // Initialize fields from schema + initial values
+        let mut fields = HashMap::new();
+        for field_schema in &schema.fields {
+            let value = initial_values
+                .get(&field_schema.name)
+                .cloned()
+                .unwrap_or_else(|| match field_schema.data_type {
+                    DataType::Double => DeviceFieldValue::Float(0.0),
+                    DataType::String => DeviceFieldValue::String("Unknown".to_string()),
+                });
+            fields.insert(field_schema.name.clone(), value);
+        }
+
+        // Create physics function
+        let physics_function = create_physics_function(physics_config);
+
+        // Create control functions
+        let functions = function_configs
+            .into_iter()
+            .map(|(name, config)| (name, create_device_function(config)))
+            .collect();
+
+        Ok(Self {
+            id,
+            device_type,
+            category,
+            fields,
+            input_ports,
+            output_ports,
+            physics_function,
+            functions,
+            schema: Some(schema),
+        })
+    }
+
+    /// Tick the device - compute outputs from inputs using physics function
+    pub fn tick(&mut self, inputs: &HashMap<String, DeviceFieldValue>, dt: f64) {
+        // 1. Compute outputs using physics function
+        let outputs = self.physics_function.compute(self, inputs, dt);
+
+        // 2. Write outputs to internal fields
+        for (field_name, value) in outputs {
+            self.fields.insert(field_name, value);
+        }
+    }
+
+    /// Call a named function on this device (e.g., "open", "set_position")
+    pub fn call_function(&mut self, name: &str, args: Vec<DeviceFieldValue>) -> Result<(), String> {
+        // Clone the Arc (cheap - just increments ref count) to avoid borrow conflicts
+        let func = self.functions.get(name)
+            .cloned()
+            .ok_or_else(|| format!("Function '{}' not found on device '{}'", name, self.id))?;
+
+        // Now we can execute with mutable access to self
+        func.execute(self, args)
+    }
+
+    /// Get a field value by name
+    pub fn get_field(&self, name: &str) -> Option<DeviceFieldValue> {
+        self.fields.get(name).cloned()
+    }
+
+    /// Set a field value
+    pub fn set_field(&mut self, name: String, value: DeviceFieldValue) {
+        self.fields.insert(name, value);
+    }
+
+    /// Get a float field value (convenience method)
+    pub fn get_float(&self, name: &str) -> Option<f64> {
+        match self.fields.get(name)? {
+            DeviceFieldValue::Float(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Get all input ports
+    pub fn get_input_ports(&self) -> &[InputPort] {
+        &self.input_ports
+    }
+
+    /// Get all output ports
+    pub fn get_output_ports(&self) -> &[OutputPort] {
+        &self.output_ports
+    }
+}
+
+impl DeviceFields for Device {
+    fn get_field(&self, field_name: &str) -> Option<DeviceFieldValue> {
+        self.fields.get(field_name).cloned()
     }
 }

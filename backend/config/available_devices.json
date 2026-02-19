@@ -1,0 +1,84 @@
+{
+  "device_schemas": [
+    {
+      "device_type": "Boiler",
+      "fields": [
+        {
+          "name": "temperature",
+          "data_type": "Double",
+          "description": "Current temperature in Celsius"
+        },
+        {
+          "name": "target_temperature",
+          "data_type": "Double",
+          "description": "Target temperature setpoint"
+        },
+        {
+          "name": "pressure",
+          "data_type": "Double",
+          "description": "Current pressure in bar"
+        },
+        {
+          "name": "status",
+          "data_type": "String",
+          "description": "Boiler status (Off, Heating, Steady, Overheat)"
+        }
+      ]
+    },
+    {
+      "device_type": "PressureMeter",
+      "fields": [
+        {
+          "name": "pressure",
+          "data_type": "Double",
+          "description": "Measured pressure in bar"
+        },
+        {
+          "name": "status",
+          "data_type": "String",
+          "description": "Meter status (Normal, Warning, Critical)"
+        }
+      ]
+    },
+    {
+      "device_type": "FlowMeter",
+      "fields": [
+        {
+          "name": "flow_rate",
+          "data_type": "Double",
+          "description": "Flow rate in L/min"
+        },
+        {
+          "name": "total_volume",
+          "data_type": "Double",
+          "description": "Total volume measured in liters"
+        },
+        {
+          "name": "status",
+          "data_type": "String",
+          "description": "Flow meter status (Normal, Low, High)"
+        }
+      ]
+    },
+    {
+      "device_type": "Valve",
+      "fields": [
+        {
+          "name": "position",
+          "data_type": "Double",
+          "description": "Valve position (0.0 = closed, 1.0 = open)"
+        },
+        {
+          "name": "mode",
+          "data_type": "String",
+          "description": "Control mode (Manual, Auto)"
+        },
+        {
+          "name": "status",
+          "data_type": "String",
+          "description": "Valve status (Open, Closed, Partial, Fault)"
+        }
+      ]
+    }
+  ]
+}

@@ -8,13 +8,16 @@ use tokio::sync::{broadcast, RwLock};
 use std::sync::Arc;
 use std::time::Duration;
 use std::collections::HashMap;
-use models::{PlantConfig, DeviceHandle, DeviceSchemaRegistry, DeviceConfigRegistry, Topology};
+use models::{PlantConfig, DeviceHandle, DeviceSchemaRegistry, DeviceConfigRegistry, Topology, DeviceFieldValue};
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_target(true)
+        .with_file(true)
+        .with_line_number(true)
+        .init();
 
-    eprintln!("DEBUG: main() started");
     tracing::info!("Starting Water Plant Digital Twin with OPC UA Architecture");
 
     // Create broadcast channel for plant state updates
@@ -23,43 +26,43 @@ async fn main() {
     let tx_scada = tx.clone();
 
     // Load device schemas, device configs, and topology
-    eprintln!("DEBUG: Loading device schemas from config/available_devices.json");
+    tracing::info!("Loading device schemas from config/available_devices.json");
     let schema_registry = match DeviceSchemaRegistry::from_json("config/available_devices.json") {
         Ok(registry) => registry,
         Err(e) => {
-            eprintln!("ERROR: Failed to load device schemas: {}", e);
+            tracing::error!("Failed to load device schemas: {}", e);
             panic!("Failed to load device schemas: {}", e);
         }
     };
 
-    eprintln!("DEBUG: Loading device configs from config/devices.json");
+    tracing::info!("Loading device configs from config/devices.json");
     let device_configs = match DeviceConfigRegistry::from_json("config/devices.json") {
         Ok(registry) => registry,
         Err(e) => {
-            eprintln!("ERROR: Failed to load device configs: {}", e);
+            tracing::error!("Failed to load device configs: {}", e);
             panic!("Failed to load device configs: {}", e);
         }
     };
 
-    eprintln!("DEBUG: Loading topology from config/topology.json");
+    tracing::info!("Loading topology from config/topology.json");
     let topology = match Topology::from_json("config/topology.json") {
         Ok(topology) => topology,
         Err(e) => {
-            eprintln!("ERROR: Failed to load topology: {}", e);
+            tracing::error!("Failed to load topology: {}", e);
             panic!("Failed to load topology: {}", e);
         }
     };
 
     // Create plant from configuration
-    eprintln!("DEBUG: Creating plant from configuration");
+    tracing::info!("Creating plant from configuration");
     let plant = match Plant::from_config(device_configs.devices, topology, &schema_registry) {
         Ok(plant) => Arc::new(RwLock::new(plant)),
         Err(e) => {
-            eprintln!("ERROR: Failed to create plant: {}", e);
+            tracing::error!("Failed to create plant: {}", e);
             panic!("Failed to create plant: {}", e);
         }
     };
-    eprintln!("DEBUG: Plant created successfully");
+    tracing::info!("Plant created successfully");
 
     // Start WebSocket server
     let ws_server = tokio::spawn(async move {
@@ -68,20 +71,19 @@ async fn main() {
         }
     });
 
-    // Create device handles from plant state
-    eprintln!("DEBUG: Creating device handles");
-    let mut device_handles: HashMap<String, DeviceHandle> = {
-        let plant_state = plant.read().await.get_state();
-        plant_state
-            .devices
-            .into_iter()
+    // Create device handles from plant devices
+    let device_handles: HashMap<String, DeviceHandle> = {
+        let plant_locked = plant.read().await;
+        plant_locked
+            .get_devices()
+            .iter()
             .map(|(id, device)| {
-                let device_arc = Arc::new(RwLock::new(device));
-                (id, DeviceHandle::new(device_arc))
+                let device_arc = Arc::new(RwLock::new(device.clone()));
+                (id.clone(), DeviceHandle::new(device_arc))
             })
             .collect()
     };
-    eprintln!("DEBUG: Created {} device handles", device_handles.len());
+    tracing::info!("Created {} device handles: [{}]", device_handles.len(), device_handles.keys().cloned().collect::<Vec<_>>().join(", "));
 
     // Clone device handles for sync task
     let device_handles_sync = device_handles.clone();
@@ -102,6 +104,31 @@ async fn main() {
         }
     });
 
+    // Periodic heartbeat: log plant state every 5 seconds
+    let plant_heartbeat = plant.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            interval.tick().await;
+            let plant = plant_heartbeat.read().await;
+            let state = plant.get_state();
+
+            let mut lines: Vec<String> = state.devices.iter()
+                .map(|(device_id, fields)| {
+                    let summary: Vec<String> = fields.iter()
+                        .map(|(k, v)| match v {
+                            DeviceFieldValue::Float(f) => format!("{}={:.2}", k, f),
+                            DeviceFieldValue::String(s) => format!("{}={}", k, s),
+                        })
+                        .collect();
+                    format!("  {}: {}", device_id, summary.join(", "))
+                })
+                .collect();
+            lines.sort();
+            tracing::info!("Plant heartbeat ({} devices):\n{}", state.devices.len(), lines.join("\n"));
+        }
+    });
+
     // Run simulation loop - updates device structs in memory
     let plant_sim = plant.clone();
     let simulation = tokio::spawn(async move {
@@ -119,74 +146,57 @@ async fn main() {
     });
 
     // Load factory configuration from JSON
-    eprintln!("DEBUG: Loading config from config/factory.json");
+    tracing::info!("Loading factory config from config/factory.json");
     let plant_config = match PlantConfig::from_json("config/factory.json") {
-        Ok(config) => {
-            eprintln!("DEBUG: Config loaded successfully");
-            config
-        }
+        Ok(config) => config,
         Err(e) => {
-            eprintln!("ERROR: Failed to load factory configuration: {}", e);
-            eprintln!("Current directory: {:?}", std::env::current_dir());
+            tracing::error!("Failed to load factory configuration: {} (cwd: {:?})", e, std::env::current_dir());
             panic!("Failed to load factory configuration: {}", e);
         }
     };
 
-    eprintln!("DEBUG: About to log PLC count");
     tracing::info!("Loaded configuration for {} PLCs", plant_config.plcs.len());
-    eprintln!("DEBUG: Logged PLC count");
 
     // Start PLC servers dynamically based on configuration
     let mut plc_tasks = Vec::new();
 
-    eprintln!("DEBUG: Starting PLC server loop");
-    eprintln!("DEBUG: plant_config.plcs.len() = {}", plant_config.plcs.len());
-    for (idx, plc_config) in plant_config.plcs.iter().enumerate() {
-        eprintln!("DEBUG: Processing PLC #{}: {}", idx, plc_config.name);
+    for plc_config in plant_config.plcs.iter() {
         let mut devices = HashMap::new();
 
         // Map device IDs to DeviceHandles (now dynamic, no hardcoded match!)
-        eprintln!("DEBUG: Mapping {} devices for {}", plc_config.device_mappings.len(), plc_config.name);
+        let device_ids: Vec<_> = plc_config.device_mappings.iter().map(|m| m.device_id.as_str()).collect();
+        tracing::info!("Mapping {} devices for {}: [{}]", device_ids.len(), plc_config.name, device_ids.join(", "));
+
         for device_mapping in &plc_config.device_mappings {
-            eprintln!("DEBUG: Mapping device: {}", device_mapping.device_id);
             if let Some(handle) = device_handles.get(&device_mapping.device_id) {
                 devices.insert(device_mapping.device_id.clone(), handle.clone());
             } else {
-                tracing::warn!("Device '{}' not found in plant", device_mapping.device_id);
+                tracing::warn!("Device '{}' not found in plant - skipping", device_mapping.device_id);
             }
         }
 
-        eprintln!("DEBUG: Device mapping complete for {}. Creating tokio task...", plc_config.name);
         let config = plc_config.clone();
-        eprintln!("DEBUG: About to spawn PLC server task for {}", config.name);
-        tracing::info!("Spawning PLC server task for {}", config.name);
+        tracing::info!("Spawning OPC UA server for {} on port {}", config.name, config.port);
         let plc_task = tokio::spawn(async move {
-            tracing::info!("PLC server task starting for {}", config.name);
             if let Err(e) = opcua_server::plc_server::start_plc_server(config.clone(), devices).await {
                 tracing::error!("{} server error: {}", config.name, e);
             }
         });
 
         plc_tasks.push(plc_task);
-        eprintln!("DEBUG: PLC task pushed to plc_tasks vector");
     }
 
-    eprintln!("DEBUG: Exited PLC server loop. Total PLC tasks: {}", plc_tasks.len());
-
     // Wait for PLC servers to start - they run in std::thread so need time to initialize
-    eprintln!("DEBUG: About to sleep for 10 seconds to let PLC servers initialize");
-    tracing::info!("Waiting for PLC servers to initialize...");
+    tracing::info!("Waiting 10s for {} OPC UA server(s) to initialize...", plc_tasks.len());
     tokio::time::sleep(Duration::from_secs(10)).await;
-    eprintln!("DEBUG: Finished sleeping");
-    tracing::info!("PLC servers should be ready now");
+    tracing::info!("OPC UA servers ready");
 
     // Start SCADA client (connects to all PLCs and aggregates data)
-    // SCADA client runs in its own thread, so we don't need to await it
     let configs_for_scada = plant_config.plcs.clone();
     if let Err(e) = opcua_server::start_scada_client(tx_scada, configs_for_scada).await {
         tracing::error!("SCADA client error: {}", e);
     }
-    eprintln!("DEBUG: SCADA client started");
+    tracing::info!("SCADA client started");
 
     tracing::info!("Backend initialized:");
     for plc_config in &plant_config.plcs {

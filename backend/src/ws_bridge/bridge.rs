@@ -7,7 +7,6 @@ use axum::{
 use axum::extract::ws::Message;
 use tower_http::cors::CorsLayer;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use tokio::sync::broadcast;
 use crate::simulator::plant::PlantState;
 
@@ -38,39 +37,60 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Resp
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
-    tracing::info!("New WebSocket connection");
+    tracing::info!("WebSocket client connected");
 
     let mut rx = state.tx.subscribe();
+    let mut msg_count: u64 = 0;
 
     loop {
         tokio::select! {
             // Receive plant state updates and send to client
             Ok(plant_state) = rx.recv() => {
+                let device_count = plant_state.devices.len();
+                let timestamp = chrono::Utc::now().to_rfc3339();
+
                 let msg = serde_json::json!({
                     "type": "snapshot",
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "timestamp": &timestamp,
                     "devices": plant_state.devices
                 });
 
                 if let Ok(json) = serde_json::to_string(&msg) {
                     if socket.send(Message::Text(json)).await.is_err() {
-                        tracing::info!("Client disconnected");
+                        tracing::info!("WebSocket client disconnected after {} messages", msg_count);
                         break;
+                    }
+                    msg_count += 1;
+
+                    // Log a brief summary every 50 messages (~5s at 100ms cadence)
+                    if msg_count % 50 == 1 {
+                        let summary: Vec<String> = plant_state.devices.iter()
+                            .map(|(id, fields)| {
+                                let vals: Vec<String> = fields.iter()
+                                    .map(|(k, v)| match v {
+                                        crate::models::DeviceFieldValue::Float(f) => format!("{}={:.2}", k, f),
+                                        crate::models::DeviceFieldValue::String(s) => format!("{}={}", k, s),
+                                    })
+                                    .collect();
+                                format!("{}: {{{}}}", id, vals.join(", "))
+                            })
+                            .collect();
+                        tracing::info!("WS → client: msg #{}, {} devices | {}", msg_count, device_count, summary.join(" | "));
                     }
                 }
             }
             // Handle incoming messages from client
             result = socket.recv() => {
                 match result {
-                    Some(Ok(_msg)) => {
-                        // Could handle commands here
+                    Some(Ok(msg)) => {
+                        tracing::debug!("WS ← client: {:?}", msg);
                     }
                     Some(Err(e)) => {
                         tracing::error!("WebSocket error: {}", e);
                         break;
                     }
                     None => {
-                        tracing::info!("WebSocket connection closed");
+                        tracing::info!("WebSocket client disconnected after {} messages", msg_count);
                         break;
                     }
                 }

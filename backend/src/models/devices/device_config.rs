@@ -59,13 +59,33 @@ impl DeviceConfigRegistry {
     /// Load device configurations from JSON file
     pub fn from_json(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;
-        eprintln!("DEBUG: Attempting to parse devices.json");
-        let registry: DeviceConfigRegistry = serde_json::from_str(&content)
-            .map_err(|e| {
-                eprintln!("DEBUG: Serde error: {:?}", e);
-                e
-            })?;
-        Ok(registry)
+        // Parse as raw JSON first, then deserialize each device individually for better errors
+        let raw: serde_json::Value = serde_json::from_str(&content)?;
+        let devices_raw = raw["devices"].as_array()
+            .ok_or("devices.json missing 'devices' array")?;
+
+        let mut devices = Vec::new();
+        for raw_device in devices_raw {
+            let id = raw_device["id"].as_str().unwrap_or("?");
+            // Try each field individually to isolate failures
+            for key in ["physics_function", "functions", "initial_values", "category", "input_ports", "output_ports"] {
+                let v = raw_device[key].clone();
+                let result = match key {
+                    "physics_function" => serde_json::from_value::<crate::simulator::physics_functions::PhysicsFunctionConfig>(v).map(|_| ()),
+                    "functions" => serde_json::from_value::<Vec<FunctionConfig>>(v).map(|_| ()),
+                    "initial_values" => serde_json::from_value::<std::collections::HashMap<String, serde_json::Value>>(v).map(|_| ()),
+                    _ => Ok(()),
+                };
+                if let Err(e) = result {
+                    eprintln!("ERROR in device '{}' field '{}': {}", id, key, e);
+                }
+            }
+            match serde_json::from_value::<DeviceConfig>(raw_device.clone()) {
+                Ok(d) => devices.push(d),
+                Err(e) => return Err(format!("Failed to parse device '{}': {}", id, e).into()),
+            }
+        }
+        Ok(DeviceConfigRegistry { devices })
     }
 
     /// Get configuration for a specific device by ID

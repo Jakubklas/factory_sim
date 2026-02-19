@@ -14,7 +14,7 @@ pub async fn start_plc_server(
     let mut server_config = ServerConfig::default();
     server_config.application_name = config.name.clone();
     server_config.application_uri = config.uri.clone();
-    server_config.create_sample_keypair = false; // TODO: Re-enable for production
+    server_config.create_sample_keypair = true;
     server_config.pki_dir = format!("./pki-{}", config.name.to_lowercase().replace(" ", "-")).into();
     server_config.discovery_server_url = None;
 

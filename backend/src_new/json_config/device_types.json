@@ -1,0 +1,74 @@
+{
+  "device_types": [
+    {
+      "device_type": "Boiler",
+      "category": "Source",
+      "physics": "TemperatureRamp",
+      "required_params": [
+        { "name": "ramp_rate",          "description": "°C per second ramp speed",         "default": 2.0  },
+        { "name": "min",                "description": "Minimum temperature (°C)",           "default": 0.0  },
+        { "name": "max",                "description": "Maximum temperature (°C)",           "default": 150.0 },
+        { "name": "pressure_from_temp", "description": "Derive pressure from temperature",   "default": 1.0  }
+      ],
+      "functions": [
+        {
+          "name": "set_target_temperature",
+          "description": "Set the boiler target temperature",
+          "kind": "SetFieldFromArg",
+          "field": "target_temperature",
+          "arg_index": 0
+        }
+      ],
+      "metrics": [
+        { "name": "temperature",        "description": "Current temperature (°C)",  "data_type": "Float", "initial_value": 20.0  },
+        { "name": "target_temperature", "description": "Target temperature (°C)",   "data_type": "Float", "initial_value": 100.0 },
+        { "name": "pressure",           "description": "Derived pressure (bar)",    "data_type": "Float", "initial_value": 1.0   },
+        { "name": "status",             "description": "Operational status",        "data_type": "Str",   "initial_value": "Off" }
+      ]
+    },
+    {
+      "device_type": "Valve",
+      "category": "Transform",
+      "physics": "PressureRegulator",
+      "required_params": [
+        { "name": "target_pressure", "description": "Target output pressure (bar)", "default": null },
+        { "name": "kp",              "description": "Proportional gain",            "default": 0.05 }
+      ],
+      "functions": [
+        {
+          "name": "open",
+          "description": "Fully open the valve",
+          "kind": "SetField",
+          "field": "position",
+          "value": 1.0
+        },
+        {
+          "name": "close",
+          "description": "Fully close the valve",
+          "kind": "SetField",
+          "field": "position",
+          "value": 0.0
+        }
+      ],
+      "metrics": [
+        { "name": "position", "description": "Valve position (0=closed, 1=open)", "data_type": "Float", "initial_value": 0.5      },
+        { "name": "status",   "description": "Valve status",                      "data_type": "Str",   "initial_value": "Partial" }
+      ]
+    },
+    {
+      "device_type": "FlowMeter",
+      "category": "Sink",
+      "physics": "FlowCalculation",
+      "required_params": [
+        { "name": "coefficient",       "description": "Flow coefficient",              "default": 10.0 },
+        { "name": "accumulate_volume", "description": "Accumulate total volume (0/1)", "default": 1.0  }
+      ],
+      "functions": [],
+      "metrics": [
+        { "name": "flow_rate",    "description": "Current flow rate (L/min)", "data_type": "Float", "initial_value": 0.0 },
+        { "name": "total_volume", "description": "Total volume passed (L)",   "data_type": "Float", "initial_value": 0.0 },
+        { "name": "status",       "description": "Flow status",               "data_type": "Str",   "initial_value": "Low" }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,30 @@
-use super::enums::{DataType, DeviceCategory, DeviceType, FunctionKind, PhysicsKind};
+use std::collections::HashMap;
+use super::enums::{DataType, DeviceCategory, FunctionKind, PhysicsKind};
 
 // ============================================================================
-// Plant → PLC → Device hierarchy
+// Device type registry  (loaded from device_types.json)
+// ============================================================================
+
+/// Definition of a device type — the "class" that instances reference.
+/// Loaded once at startup from device_types.json.
+pub struct DeviceTypeDefinition {
+    pub device_type: String,                    // "Valve", "Boiler" — the lookup key
+    pub category: DeviceCategory,
+    pub physics: PhysicsKind,                   // which physics model to use
+    pub functions: Vec<DeviceFunctionConfig>,   // control commands available on this type
+    pub metrics: Vec<DeviceMetric>,             // field schema + default initial values
+    pub required_params: Vec<ParamSpec>,        // params the instance must supply (e.g. target_pressure)
+}
+
+/// A single param that an instance must provide for the physics model.
+pub struct ParamSpec {
+    pub name: String,           // "target_pressure"
+    pub description: String,
+    pub default: Option<f64>,   // None = truly mandatory; Some = has a sensible default
+}
+
+// ============================================================================
+// Plant → PLC → Device hierarchy  (loaded from factory.json)
 // ============================================================================
 
 /// Top-level config. One plant = one factory / simulation instance.
@@ -14,7 +37,6 @@ pub struct PlantConfig {
 }
 
 /// A PLC (Programmable Logic Controller) — the physical OPC-UA endpoint.
-/// Owns a list of devices wired into it.
 pub struct PlcConfig {
     pub plc_id: String,
     pub name: String,
@@ -25,18 +47,16 @@ pub struct PlcConfig {
 }
 
 /// A single device instance attached to a PLC.
-/// Contains everything needed to build the runtime Device in simulator/.
+/// Minimal — just wiring, identity, and instance-specific param values.
+/// Physics, functions, and metrics are resolved from DeviceTypeDefinition at load time.
 pub struct DeviceConfig {
     pub device_id: String,
     pub name: String,
-    pub device_type: DeviceType,
-    pub category: DeviceCategory,
+    pub device_type: String,                // FK into DeviceTypeDefinition registry
     pub input_ports: Vec<InputPort>,
     pub output_ports: Vec<OutputPort>,
-    pub physics: PhysicsKind,
-    pub functions: Vec<DeviceFunctionConfig>,
-    pub metrics: Vec<DeviceMetric>,
-    pub tick_ms: Option<u64>,   // overrides PlantConfig.default_tick_ms if set
+    pub tick_ms: Option<u64>,              // overrides PlantConfig.default_tick_ms if set
+    pub params: HashMap<String, f64>,      // must satisfy DeviceTypeDefinition.required_params
 }
 
 // ============================================================================
@@ -56,21 +76,18 @@ pub struct OutputPort {
     pub target_field: String,
 }
 
-/// A named control function exposed by this device (e.g. "open", "set_position").
-/// Named DeviceFunctionConfig (not DeviceFunction) to avoid clashing
-/// with the DeviceFunction trait that will live in simulator/.
+/// A named control function exposed by a device type (e.g. "open", "set_position").
 pub struct DeviceFunctionConfig {
     pub name: String,
     pub description: String,
     pub kind: FunctionKind,
 }
 
-/// A single observable metric/field on a device.
-/// Acts as both schema (data_type declares what type) and
-/// seed for runtime state (initial_value seeds Device.fields at startup).
+/// A single observable metric/field on a device type.
+/// Acts as both schema (data_type) and seed for runtime state (initial_value).
 pub struct DeviceMetric {
     pub name: String,
     pub description: String,
     pub data_type: DataType,
-    pub initial_value: Option<DataType>,
+    pub initial_value: Option<DataType>,  // None → DataType default (0.0 / "" / false)
 }

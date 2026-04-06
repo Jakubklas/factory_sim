@@ -1,0 +1,109 @@
+{
+  "plant_id": "plant_001",
+  "name": "Demo Plant",
+  "description": "Single-line water heating demo",
+  "default_tick_ms": 100,
+  "plcs": [
+    {
+      "plc_id": "plc_001",
+      "name": "Main PLC",
+      "uri": "opc.tcp://localhost",
+      "port": 4840,
+      "endpoint": "/freeopcua/server/",
+      "devices": [
+        {
+          "device_id": "boiler_001",
+          "name": "Main Boiler",
+          "device_type": "Boiler",
+          "category": "Source",
+          "input_ports": [],
+          "output_ports": [
+            { "name": "heat_out", "target_field": "temperature" }
+          ],
+          "physics": {
+            "kind": "TemperatureRamp",
+            "ramp_rate": 2.0,
+            "min": 0.0,
+            "max": 150.0,
+            "pressure_from_temp": true
+          },
+          "functions": [
+            {
+              "name": "set_target_temperature",
+              "description": "Set the boiler target temperature",
+              "kind": "SetFieldFromArg",
+              "field": "target_temperature",
+              "arg_index": 0
+            }
+          ],
+          "metrics": [
+            { "name": "temperature",        "description": "Current temperature (°C)",  "data_type": "Float",   "initial_value": 20.0 },
+            { "name": "target_temperature", "description": "Target temperature (°C)",   "data_type": "Float",   "initial_value": 100.0 },
+            { "name": "pressure",           "description": "Derived pressure (bar)",    "data_type": "Float",   "initial_value": 1.0 },
+            { "name": "status",             "description": "Operational status",        "data_type": "Str",     "initial_value": "Off" }
+          ]
+        },
+        {
+          "device_id": "valve_001",
+          "name": "Outlet Valve",
+          "device_type": "Valve",
+          "category": "Transform",
+          "input_ports": [
+            { "name": "pressure_in", "source_device_id": "boiler_001", "source_field": "pressure" }
+          ],
+          "output_ports": [
+            { "name": "flow_out", "target_field": "position" }
+          ],
+          "physics": {
+            "kind": "PressureRegulator",
+            "target_pressure": 3.0,
+            "kp": 0.05
+          },
+          "functions": [
+            {
+              "name": "open",
+              "description": "Fully open the valve",
+              "kind": "SetField",
+              "field": "position",
+              "value": 1.0
+            },
+            {
+              "name": "close",
+              "description": "Fully close the valve",
+              "kind": "SetField",
+              "field": "position",
+              "value": 0.0
+            }
+          ],
+          "metrics": [
+            { "name": "position", "description": "Valve position (0=closed, 1=open)", "data_type": "Float", "initial_value": 0.5 },
+            { "name": "status",   "description": "Valve status",                      "data_type": "Str",   "initial_value": "Partial" }
+          ]
+        },
+        {
+          "device_id": "flow_meter_001",
+          "name": "Flow Meter",
+          "device_type": "Pump",
+          "category": "Sink",
+          "input_ports": [
+            { "name": "pressure_in",  "source_device_id": "boiler_001", "source_field": "pressure" },
+            { "name": "valve_in",     "source_device_id": "valve_001",  "source_field": "position" }
+          ],
+          "output_ports": [],
+          "physics": {
+            "kind": "FlowCalculation",
+            "coefficient": 10.0,
+            "accumulate_volume": true
+          },
+          "functions": [],
+          "tick_ms": 500,
+          "metrics": [
+            { "name": "flow_rate",    "description": "Current flow rate (L/min)", "data_type": "Float", "initial_value": 0.0 },
+            { "name": "total_volume", "description": "Total volume passed (L)",   "data_type": "Float", "initial_value": 0.0 },
+            { "name": "status",       "description": "Flow status",               "data_type": "Str",   "initial_value": "Low" }
+          ]
+        }
+      ]
+    }
+  ]
+}

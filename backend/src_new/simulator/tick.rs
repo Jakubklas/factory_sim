@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use crate::simulator::{FactoryHandle, PhysicsEngine};
+use crate::simulator::{PlantHandle, PhysicsEngine};
+use crate::models::PhysicsMode;
 
 /// Pre-computed device execution order, built once at startup from the wiring graph.
 /// Devices are sorted topologically so upstream outputs are always ready before
@@ -11,7 +12,7 @@ pub struct TickPlan {
 impl TickPlan {
     /// Build the execution order from the current wiring.
     /// Returns an error if the wiring graph contains a cycle.
-    pub fn build(handle: &FactoryHandle) -> Result<Self, String> {
+    pub fn build(handle: &PlantHandle) -> Result<Self, String> {
         let devices = handle.resolved_devices();
 
         // Map device_id → list of device_ids it depends on (its upstream sources)
@@ -84,15 +85,15 @@ impl TickPlan {
 /// Run one simulation tick across all devices in topological order.
 ///
 /// For each device:
-///   1. Copy input port values from upstream devices' live state into this device's state.
+///   1. Copy input variable values from upstream devices' live state into this device's state.
 ///      (e.g. Valve's outlet_pressure → FlowMeter's inlet_pressure)
 ///   2. Run the physics script via PhysicsEngine.
-///   3. Write the updated state back into FactoryHandle.
+///   3. Write the updated state back into PlantHandle.
 ///
 /// Live devices (PhysicsMode::Live) skip step 2 — their state is written
 /// directly by the OPC-UA reader in comms/.
 pub fn tick(
-    handle:  &mut FactoryHandle,
+    handle:  &mut PlantHandle,
     plan:    &TickPlan,
     physics: &PhysicsEngine,
     dt:      f64,
@@ -116,17 +117,19 @@ pub fn tick(
         }
 
         // --- 2. Run physics script ---
-        let device_type = match handle.get_resolved(device_id) {
-            Some(d) => d.config.device_type.clone(),
-            None    => continue,
+        let (device_type, physics_mode, params) = match handle.get_resolved(device_id) {
+            Some(d) => (
+                d.config.device_type.clone(),
+                d.type_def.physics_mode,
+                d.config.params.clone(),
+            ),
+            None => continue,
         };
 
-        // Clone state out, run script, write back.
-        // Clone cost is acceptable at SCADA tick rates (≥50ms) for small field maps.
-        let params = match handle.get_resolved(device_id) {
-            Some(d) => d.config.params.clone(),
-            None    => continue,
-        };
+        // Live devices are owned by the OPC-UA reader — skip physics entirely
+        if matches!(physics_mode, PhysicsMode::Live) {
+            continue;
+        }
 
         if let Some(mut device_state) = handle.get_device_state(device_id).cloned() {
             if let Err(e) = physics.run(&device_type, &mut device_state, &params, dt) {

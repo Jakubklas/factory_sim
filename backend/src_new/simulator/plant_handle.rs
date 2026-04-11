@@ -24,15 +24,15 @@ impl ResolvedDevice {
 
 /// Runtime handle for a loaded plant.
 /// Owns the static config tree, the type registry, resolved devices, and all live state.
-/// Wrap in Arc<RwLock<FactoryHandle>> and share across threads.
-pub struct FactoryHandle {
+/// Wrap in Arc<RwLock<PlantHandle>> and share across threads.
+pub struct PlantHandle {
     config:   PlantConfig,
     registry: HashMap<String, DeviceTypeDefinition>,  // device_type → definition
     devices:  Vec<ResolvedDevice>,                    // all devices, type already merged in
     state:    LiveState,                              // live field values, mutated every tick
 }
 
-impl FactoryHandle {
+impl PlantHandle {
     // -------------------------------------------------------------------------
     // Loading
     // -------------------------------------------------------------------------

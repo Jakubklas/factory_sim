@@ -52,7 +52,7 @@ impl PhysicsEngine {
     /// `params` — instance params from DeviceConfig; read-only inside the script.
     /// `dt`     — seconds elapsed since last tick.
     ///
-    /// If no script exists for this device type (LivePLC or no definition),
+    /// If no script exists for this device type (Live or no definition),
     /// returns Ok(()) immediately without touching state.
     pub fn run(
         &self,

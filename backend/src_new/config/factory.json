@@ -15,26 +15,19 @@
           "device_id": "boiler_001",
           "name": "Main Boiler",
           "device_type": "Boiler",
-          "input_ports": [],
-          "output_ports": [
-            { "name": "heat_out", "target_field": "temperature" }
-          ],
+          "input_variables": [],
           "params": {
             "ramp_rate": 2.0,
             "min": 0.0,
-            "max": 150.0,
-            "pressure_from_temp": 1.0
+            "max": 150.0
           }
         },
         {
           "device_id": "valve_001",
           "name": "Outlet Valve",
           "device_type": "Valve",
-          "input_ports": [
-            { "name": "pressure_in", "source_device_id": "boiler_001", "source_field": "pressure" }
-          ],
-          "output_ports": [
-            { "name": "flow_out", "target_field": "position" }
+          "input_variables": [
+            { "name": "inlet_pressure", "source_device_id": "boiler_001", "source_field": "pressure" }
           ],
           "params": {
             "target_pressure": 3.0,
@@ -46,11 +39,10 @@
           "name": "Flow Meter",
           "device_type": "FlowMeter",
           "tick_ms": 500,
-          "input_ports": [
-            { "name": "pressure_in", "source_device_id": "boiler_001", "source_field": "pressure" },
-            { "name": "valve_in",    "source_device_id": "valve_001",  "source_field": "position" }
+          "input_variables": [
+            { "name": "inlet_pressure", "source_device_id": "valve_001",  "source_field": "outlet_pressure" },
+            { "name": "valve_position", "source_device_id": "valve_001",  "source_field": "position" }
           ],
-          "output_ports": [],
           "params": {
             "coefficient": 10.0,
             "accumulate_volume": 1.0

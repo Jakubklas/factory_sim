@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use super::enums::{DataType, DeviceCategory, FunctionKind, PhysicsKind};
+use super::enums::{DataType, FunctionKind, PhysicsMode};
 
 // ============================================================================
 // Device type registry  (loaded from device_types.json)
@@ -8,12 +8,12 @@ use super::enums::{DataType, DeviceCategory, FunctionKind, PhysicsKind};
 /// Definition of a device type — the "class" that instances reference.
 /// Loaded once at startup from device_types.json.
 pub struct DeviceTypeDefinition {
-    pub device_type: String,                    // "Valve", "Boiler" — the lookup key
-    pub category: DeviceCategory,
-    pub physics: PhysicsKind,                   // which physics model to use
-    pub functions: Vec<DeviceFunctionConfig>,   // control commands available on this type
-    pub metrics: Vec<DeviceMetric>,             // field schema + default initial values
-    pub required_params: Vec<ParamSpec>,        // params the instance must supply (e.g. target_pressure)
+    pub device_type:        String,                   // "Valve", "Boiler" — the lookup key
+    pub physics_mode:       PhysicsMode,              // Simulation or Live
+    pub physics_definition: Option<String>,           // Rhai script; None = no simulation (LivePLC only)
+    pub functions:          Vec<DeviceFunctionConfig>, // control commands available on this type
+    pub metrics:            Vec<DeviceMetric>,         // field schema + default initial values
+    pub required_params:    Vec<ParamSpec>,            // params the instance must supply
 }
 
 /// A single param that an instance must provide for the physics model.
@@ -53,8 +53,7 @@ pub struct DeviceConfig {
     pub device_id: String,
     pub name: String,
     pub device_type: String,                // FK into DeviceTypeDefinition registry
-    pub input_ports: Vec<InputPort>,
-    pub output_ports: Vec<OutputPort>,
+    pub input_variables: Vec<InputVariable>,
     pub tick_ms: Option<u64>,              // overrides PlantConfig.default_tick_ms if set
     pub params: HashMap<String, f64>,      // must satisfy DeviceTypeDefinition.required_params
 }
@@ -63,17 +62,11 @@ pub struct DeviceConfig {
 // Device sub-structs
 // ============================================================================
 
-/// Defines where a device reads an input value from (another device's field).
-pub struct InputPort {
+/// Defines where a device reads an input value from (another device's field in LiveState).
+pub struct InputVariable {
     pub name: String,
     pub source_device_id: String,
     pub source_field: String,
-}
-
-/// Defines a field this device writes to (consumed by downstream devices).
-pub struct OutputPort {
-    pub name: String,
-    pub target_field: String,
 }
 
 /// A named control function exposed by a device type (e.g. "open", "set_position").

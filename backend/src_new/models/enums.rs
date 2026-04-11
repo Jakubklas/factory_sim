@@ -1,14 +1,3 @@
-/// How a device participates in the simulation graph.
-/// Mirrors stream-processing semantics (Flink-style):
-///   Source    — produces data, no inputs     (e.g. boiler, sensor)
-///   Transform — consumes + produces data     (e.g. valve, mixer)
-///   Sink      — consumes data, no outputs    (e.g. logger, display)
-pub enum DeviceCategory {
-    Source,
-    Transform,
-    Sink,
-}
-
 /// A field's data type AND its value in one enum.
 /// Used both as a schema declaration (what type a metric is)
 /// and as a value container (the actual current/initial value).
@@ -18,16 +7,12 @@ pub enum DataType {
     Boolean(bool),
 }
 
-/// Describes the physics model to use for a device type.
-/// Numeric params are NOT stored here — they come from DeviceConfig.params
-/// at load time, validated against DeviceTypeDefinition.required_params.
-/// Config-only — the actual computation lives in simulator/.
-pub enum PhysicsKind {
-    TemperatureRamp,
-    PressurePassthrough,
-    FlowCalculation,
-    PressureRegulator,
-    Static,
+/// Whether this device type runs a physics simulation or reads from a real PLC.
+/// When Live, the physics_definition script is ignored — OPC-UA writes
+/// state directly into FactoryHandle every tick.
+pub enum PhysicsMode {
+    Simulation,  // run physics_definition script each tick
+    Live,        // skip physics; tick loop reads raw OPC-UA values instead
 }
 
 /// Describes a control function a device exposes (e.g. "open", "set_position").

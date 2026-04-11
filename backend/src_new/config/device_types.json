@@ -1,0 +1,77 @@
+{
+  "device_types": [
+    {
+      "device_type": "Boiler",
+      "physics_mode": "Simulation",
+      "physics_definition": "let temp = state[\"temperature\"];\nlet target = state[\"target_temperature\"];\nlet ramp = params[\"ramp_rate\"];\nif temp < target {\n  state[\"temperature\"] = min(temp + ramp * dt, target);\n  state[\"status\"] = \"Heating\";\n} else if temp > target {\n  state[\"temperature\"] = max(temp - ramp * dt, target);\n  state[\"status\"] = \"Cooling\";\n} else {\n  state[\"status\"] = \"Stable\";\n}\nstate[\"pressure\"] = (state[\"temperature\"] / 100.0) * 5.0;",
+      "required_params": [
+        { "name": "ramp_rate", "description": "°C per second ramp speed",  "default": 2.0   },
+        { "name": "min",       "description": "Minimum temperature (°C)",   "default": 0.0   },
+        { "name": "max",       "description": "Maximum temperature (°C)",   "default": 150.0 }
+      ],
+      "functions": [
+        {
+          "name": "set_target_temperature",
+          "description": "Set the boiler target temperature",
+          "kind": "SetFieldFromArg",
+          "field": "target_temperature",
+          "arg_index": 0
+        }
+      ],
+      "metrics": [
+        { "name": "temperature",        "description": "Current temperature (°C)",  "data_type": "Float", "initial_value": 20.0  },
+        { "name": "target_temperature", "description": "Target temperature (°C)",   "data_type": "Float", "initial_value": 100.0 },
+        { "name": "pressure",           "description": "Derived pressure (bar)",    "data_type": "Float", "initial_value": 1.0   },
+        { "name": "status",             "description": "Operational status",        "data_type": "Str",   "initial_value": "Off" }
+      ]
+    },
+    {
+      "device_type": "Valve",
+      "physics_mode": "Simulation",
+      "physics_definition": "let pos = state[\"position\"];\nif pos >= 0.99 {\n  state[\"status\"] = \"Open\";\n} else if pos <= 0.01 {\n  state[\"status\"] = \"Closed\";\n} else {\n  state[\"status\"] = \"Partial\";\n}\nstate[\"outlet_pressure\"] = state[\"inlet_pressure\"] * pos;",
+      "required_params": [
+        { "name": "target_pressure", "description": "Target output pressure (bar)", "default": null },
+        { "name": "kp",              "description": "Proportional gain",            "default": 0.05 }
+      ],
+      "functions": [
+        {
+          "name": "open",
+          "description": "Fully open the valve",
+          "kind": "SetField",
+          "field": "position",
+          "value": 1.0
+        },
+        {
+          "name": "close",
+          "description": "Fully close the valve",
+          "kind": "SetField",
+          "field": "position",
+          "value": 0.0
+        }
+      ],
+      "metrics": [
+        { "name": "position",        "description": "Valve position (0=closed, 1=open)", "data_type": "Float", "initial_value": 0.5     },
+        { "name": "inlet_pressure",  "description": "Upstream pressure (bar)",           "data_type": "Float", "initial_value": 0.0     },
+        { "name": "outlet_pressure", "description": "Downstream pressure (bar)",         "data_type": "Float", "initial_value": 0.0     },
+        { "name": "status",          "description": "Valve status",                      "data_type": "Str",   "initial_value": "Partial" }
+      ]
+    },
+    {
+      "device_type": "FlowMeter",
+      "physics_mode": "Simulation",
+      "physics_definition": "let coeff = params[\"coefficient\"];\nstate[\"flow_rate\"] = state[\"inlet_pressure\"] * state[\"valve_position\"] * 10.0 * coeff;\nif params[\"accumulate_volume\"] > 0.5 {\n  state[\"total_volume\"] = state[\"total_volume\"] + state[\"flow_rate\"] * dt;\n}\nif state[\"flow_rate\"] > 1.0 { state[\"status\"] = \"Normal\"; } else { state[\"status\"] = \"Low\"; }",
+      "required_params": [
+        { "name": "coefficient",       "description": "Flow coefficient",              "default": 10.0 },
+        { "name": "accumulate_volume", "description": "Accumulate total volume (0/1)", "default": 1.0  }
+      ],
+      "functions": [],
+      "metrics": [
+        { "name": "flow_rate",      "description": "Current flow rate (L/min)",     "data_type": "Float", "initial_value": 0.0 },
+        { "name": "total_volume",   "description": "Total volume passed (L)",       "data_type": "Float", "initial_value": 0.0 },
+        { "name": "inlet_pressure", "description": "Upstream pressure (bar)",       "data_type": "Float", "initial_value": 0.0 },
+        { "name": "valve_position", "description": "Upstream valve position (0–1)", "data_type": "Float", "initial_value": 0.0 },
+        { "name": "status",         "description": "Flow status",                   "data_type": "Str",   "initial_value": "Low" }
+      ]
+    }
+  ]
+}

@@ -1,9 +1,8 @@
 pub mod factory_handle;
 pub mod functions;
-pub mod physics;
+pub mod physics_definitions;
+pub mod tick;
 
 pub use factory_handle::FactoryHandle;
-
-// Planned next:
-//   traits.rs  — DeviceFunction trait, PhysicsFunction trait
-//   tick.rs    — simulation loop
+pub use physics_definitions::PhysicsEngine;
+pub use tick::{tick, TickPlan};

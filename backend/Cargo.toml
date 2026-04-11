@@ -25,6 +25,9 @@ chrono = "0.4"
 # Random for simulation noise
 rand = "0.8"
 
+# Embedded scripting engine for user-defined physics
+rhai = { version = "1", features = ["sync"] }
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

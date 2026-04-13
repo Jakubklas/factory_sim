@@ -104,9 +104,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     // -------------------------------------------------------------------------
-    // TODO: spawn comms layer
-    //   comms::plc_server::start(Arc::clone(&handle)).await?;
-    //   comms::ws_bridge::start(Arc::clone(&handle)).await?;
+    // -------------------------------------------------------------------------
+    // Spawn comms layer
+    // -------------------------------------------------------------------------
+    comms::plc_server::start(Arc::clone(&handle)).await?;
+    // TODO: comms::ws_bridge::start(Arc::clone(&handle)).await?;
     // -------------------------------------------------------------------------
 
     // Keep main alive until Ctrl-C

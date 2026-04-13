@@ -1,3 +1,4 @@
 pub mod scada;
+pub mod plc_server;
 
-pub use scada::start_scada_client;
+pub use plc_server::start as start_plc_server;

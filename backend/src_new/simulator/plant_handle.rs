@@ -126,6 +126,11 @@ impl PlantHandle {
         self.state.get(device_id)
     }
 
+    /// Full snapshot of live state — used by plc_server and ws_bridge to broadcast.
+    pub fn state_snapshot(&self) -> HashMap<DeviceId, HashMap<FieldName, DataType>> {
+        self.state.clone()
+    }
+
     // -------------------------------------------------------------------------
     // Live state — writes
     // -------------------------------------------------------------------------

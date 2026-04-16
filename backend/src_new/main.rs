@@ -107,8 +107,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------------------
     // Spawn comms layer
     // -------------------------------------------------------------------------
+
+    // 1. PLC server — exposes simulated devices as OPC-UA endpoints
     comms::plc_server::start(Arc::clone(&handle)).await?;
-    // TODO: comms::ws_bridge::start(Arc::clone(&handle)).await?;
+
+    // 2. SCADA connectors — one thread per PLC endpoint, polls into IngestedState
+    let ingested = comms::start_connectors(Arc::clone(&handle)).await?;
+
+    // 3. TODO: ws_bridge — streams IngestedState to frontend
+    //    comms::ws_bridge::start(Arc::clone(&ingested)).await?;
     // -------------------------------------------------------------------------
 
     // Keep main alive until Ctrl-C

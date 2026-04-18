@@ -40,12 +40,36 @@ pub struct ScadaPlcConnector {
     node_reads: Vec<NodeRead>,
 }
 
+impl ScadaPlcConnector {
+    pub fn new(plc: &PlcConfig, handle: &PlantHandle) -> Self {
+        let endpoint = format!("{}:{}{}", plc.uri, plc.port, plc.endpoint);
+
+        let node_reads = handle.resolved_devices()
+            .iter()
+            .filter(|d| plc.devices.iter().any(|pd| pd.device_id == d.config.device_id))
+            .flat_map(|d| {
+                d.type_def.metrics.iter().map(move |m| {
+                    let data_type = match &m.data_type {
+                        DataType::Float(_)   => NodeDataType::Float,
+                        DataType::Str(_)     => NodeDataType::Str,
+                        DataType::Boolean(_) => NodeDataType::Boolean,
+                    };
+                    NodeRead {
+                        device_id:   d.config.device_id.clone(),
+                        metric_name: m.name.clone(),
+                        node_id:     format!("ns=2;s={}.{}.{}", plc.name, d.config.device_id, m.name),
+                        data_type,
+                    }
+                })
+            })
+            .collect();
+
+        Self { plc_name: plc.name.clone(), endpoint, node_reads }
+    }
+}
+
 impl ConnectorImpl for ScadaPlcConnector {
     type Conn = PlcConnection;
-
-    fn endpoint_name(&self) -> &str {
-        &self.plc_name
-    }
 
     fn connect(&self) -> Result<PlcConnection, Box<dyn std::error::Error + Send + Sync>> {
         let (client, session) = connect_to_plc(&self.endpoint)?;
@@ -71,35 +95,6 @@ impl ConnectorImpl for ScadaPlcConnector {
     }
 }
 
-/// Build one ScadaPlcConnector per PLC in the plant config.
-/// Called once at startup — no runtime lookups after this point.
-pub fn build_scada_connectors(handle: &PlantHandle) -> Vec<ScadaPlcConnector> {
-    handle.all_plcs().iter().map(|plc| {
-        let endpoint = format!("{}:{}{}", plc.uri, plc.port, plc.endpoint);
-
-        let node_reads = handle.resolved_devices()
-            .iter()
-            .filter(|d| plc.devices.iter().any(|pd| pd.device_id == d.config.device_id))
-            .flat_map(|d| {
-                d.type_def.metrics.iter().map(move |m| {
-                    let data_type = match &m.data_type {
-                        DataType::Float(_)   => NodeDataType::Float,
-                        DataType::Str(_)     => NodeDataType::Str,
-                        DataType::Boolean(_) => NodeDataType::Boolean,
-                    };
-                    NodeRead {
-                        device_id:   d.config.device_id.clone(),
-                        metric_name: m.name.clone(),
-                        node_id:     format!("ns=2;s={}.{}.{}", plc.name, d.config.device_id, m.name),
-                        data_type,
-                    }
-                })
-            })
-            .collect();
-
-        ScadaPlcConnector { plc_name: plc.name.clone(), endpoint, node_reads }
-    }).collect()
-}
 
 // ============================================================================
 // OPC-UA helpers

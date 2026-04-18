@@ -3,24 +3,21 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use crate::models::DataType;
 
-// Layout: device_id → field_name → value
+// Full shared state, written to by all connectors. Layout: device_id → field_name → value
 pub type IngestedState = HashMap<String, HashMap<String, DataType>>;
+// One connector's poll result — upserted into IngestedState each tick, leaving other devices untouched.
 pub type PartialState  = HashMap<String, HashMap<String, DataType>>;
 
 // ============================================================================
 // ConnectorImpl — implement this to add a new protocol
 // ============================================================================
 
-/// One endpoint, one connection type.
-/// `GenericConnector` calls `connect()` at startup and after any poll failure,
-/// and calls `poll()` every tick to get a partial state update.
+/// Protocol behaviour only — connect and poll.
+/// Identity (name) lives on GenericConnector, not here.
 pub trait ConnectorImpl: Send + 'static {
     /// The live connection handle (e.g. a session, a client, a pool).
     /// Must be `Send` so the runner thread can own it.
     type Conn: Send + 'static;
-
-    /// Human-readable name used in log messages.
-    fn endpoint_name(&self) -> &str;
 
     /// Open a fresh connection. Called once at startup and on reconnect.
     /// Backoff and retry are handled by GenericConnector — make a single attempt here.
@@ -36,18 +33,18 @@ pub trait ConnectorImpl: Send + 'static {
 // GenericConnector — one OS thread per connector
 // ============================================================================
 
-const BACKOFF_SECS: &[u64] = &[1, 2, 4, 8, 16, 30];
-
 // C is the concrete connector type (e.g. ScadaPlcConnector) — resolved at compile time.
 pub struct GenericConnector<C: ConnectorImpl> {
-    impl_:    C,
-    tick_ms:  u64,
-    ingested: Arc<RwLock<IngestedState>>,
+    name:         String,
+    impl_:        C,
+    tick_ms:      u64,
+    ingested:     Arc<RwLock<IngestedState>>,
+    backoff_secs: &'static [u64],
 }
 
 impl<C: ConnectorImpl> GenericConnector<C> {
-    pub fn new(impl_: C, tick_ms: u64, ingested: Arc<RwLock<IngestedState>>) -> Self {
-        Self { impl_, tick_ms, ingested }
+    pub fn new(name: impl Into<String>, impl_: C, tick_ms: u64, ingested: Arc<RwLock<IngestedState>>) -> Self {
+        Self { name: name.into(), impl_, tick_ms, ingested, backoff_secs: &[1, 2, 4, 8, 16, 30] }
     }
 
     /// Spawn the poll thread. Consumes self — ownership moves into the thread.
@@ -55,23 +52,21 @@ impl<C: ConnectorImpl> GenericConnector<C> {
         std::thread::spawn(move || self.run());
     }
 
-    /// Connect with exponential backoff, retrying indefinitely.
-    /// A long-running process should keep trying — hardware comes back.
     fn connect_with_backoff(&self) -> C::Conn {
         let mut attempt: usize = 0;
         loop {
             match self.impl_.connect() {
                 Ok(conn) => {
                     if attempt > 0 {
-                        tracing::info!("Connector '{}' reconnected", self.impl_.endpoint_name());
+                        tracing::info!("Connector '{}' reconnected", self.name);
                     }
                     return conn;
                 }
                 Err(e) => {
-                    let delay = BACKOFF_SECS[attempt.min(BACKOFF_SECS.len() - 1)];
+                    let delay = self.backoff_secs[attempt.min(self.backoff_secs.len() - 1)];
                     tracing::warn!(
                         "Connector '{}' connect attempt {} failed — retrying in {}s: {}",
-                        self.impl_.endpoint_name(), attempt + 1, delay, e
+                        self.name, attempt + 1, delay, e
                     );
                     std::thread::sleep(std::time::Duration::from_secs(delay));
                     attempt += 1;
@@ -81,7 +76,7 @@ impl<C: ConnectorImpl> GenericConnector<C> {
     }
 
     fn run(self) {
-        tracing::info!("Connector '{}' starting", self.impl_.endpoint_name());
+        tracing::info!("Connector '{}' starting", self.name);
         let mut conn = self.connect_with_backoff();
 
         loop {
@@ -100,7 +95,7 @@ impl<C: ConnectorImpl> GenericConnector<C> {
                 Err(e) => {
                     tracing::warn!(
                         "Connector '{}' poll failed — reconnecting: {}",
-                        self.impl_.endpoint_name(), e
+                        self.name, e
                     );
                     conn = self.connect_with_backoff();
                 }

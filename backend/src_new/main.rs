@@ -10,6 +10,7 @@ mod comms;
 
 use config_handle::{DeviceTypeRegistry, PlantStore};
 use simulator::{PlantHandle, PhysicsEngine, TickPlan, tick};
+use comms::{GenericConnector, IngestedState, ScadaPlcConnector};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -112,7 +113,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     comms::plc_server::start(Arc::clone(&handle)).await?;
 
     // 2. SCADA connectors — one thread per PLC endpoint, polls into IngestedState
-    let ingested = comms::start_connectors(Arc::clone(&handle)).await?;
+    let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(std::collections::HashMap::new()));
+    {
+        let h = handle.read().await;
+        let tick_ms = h.default_tick_ms();
+        tracing::info!("Starting {} SCADA connector(s)", h.all_plcs().len());
+        for plc in h.all_plcs() {
+            GenericConnector::new(&plc.name, ScadaPlcConnector::new(plc, &h), tick_ms, Arc::clone(&ingested)).start();
+        }
+    }
 
     // 3. TODO: ws_bridge — streams IngestedState to frontend
     //    comms::ws_bridge::start(Arc::clone(&ingested)).await?;

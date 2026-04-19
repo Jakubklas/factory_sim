@@ -47,7 +47,10 @@ async fn start_plc_server(
     server_config.application_name = plc.name.clone();
     server_config.application_uri  = plc.uri.clone();
     server_config.create_sample_keypair = true;
-    server_config.pki_dir = format!("./pki-{}", plc.name.to_lowercase().replace(' ', "-")).into();
+    server_config.pki_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(format!("pki/servers/{}", plc.name.to_lowercase().replace(' ', "-")))))
+        .unwrap_or_else(|| format!("pki/servers/{}", plc.name.to_lowercase().replace(' ', "-")).into());
     server_config.discovery_server_url = None;
     server_config.tcp_config = TcpConfig {
         hello_timeout: 10,

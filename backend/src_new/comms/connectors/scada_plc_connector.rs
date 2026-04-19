@@ -110,12 +110,18 @@ impl ConnectorImpl for ScadaPlcConnector {
 fn connect_to_plc(
     endpoint: &str,
 ) -> Result<(Client, Arc<OpcRwLock<Session>>), Box<dyn std::error::Error + Send + Sync>> {
+    let pki_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("pki/clients/scada")))
+        .unwrap_or_else(|| "pki/clients/scada".into());
+
     let mut client = ClientBuilder::new()
         .application_name("factory-sim-scada")
         .application_uri("urn:factory-sim-scada")
         .create_sample_keypair(true)
         .trust_server_certs(true)
         .session_retry_limit(3)
+        .pki_dir(pki_dir)
         .client()
         .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
             "ClientBuilder::client() returned None — check OPC-UA config".into()

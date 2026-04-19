@@ -84,6 +84,12 @@ impl<C: ConnectorImpl> GenericConnector<C> {
 
             match self.impl_.poll(&conn) {
                 Ok(partial) => {
+                    tracing::debug!(
+                        "Connector '{}' polled {} device(s): [{}]",
+                        self.name,
+                        partial.len(),
+                        partial.keys().cloned().collect::<Vec<_>>().join(", ")
+                    );
                     // Partial write: only overwrite keys owned by this connector.
                     // Other connectors' device entries are left untouched.
                     if let Ok(mut state) = self.ingested.try_write() {

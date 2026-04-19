@@ -10,17 +10,23 @@ mod comms;
 
 use config_handle::{DeviceTypeRegistry, PlantRegistry, PlantConfigHandle};
 use simulator::SimulatorModule;
-use comms::{GenericConnector, IngestedState, ScadaPlcConnector};
+use comms::{GenericConnector, IngestedState, ScadaPlcConnector, release_ports};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // -------------------------------------------------------------------------
-    // Logging
+    // Logging — RUST_LOG env var overrides the default directives.
+    // e.g. RUST_LOG=water_plant_twin=debug,opcua=warn cargo run
     // -------------------------------------------------------------------------
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env()
-            .add_directive("info".parse()?))
+        .with_env_filter(
+            EnvFilter::from_default_env()
+                .add_directive("info".parse()?)
+                .add_directive("opcua=warn".parse()?)  // suppress OPC-UA protocol noise
+        )
         .init();
+
+    tracing::info!("=== water-plant-twin starting ===");
 
     // -------------------------------------------------------------------------
     // Resolve config paths relative to the binary location
@@ -45,11 +51,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = PlantConfigHandle::new(type_registry, plant_registry)?;
 
     // -------------------------------------------------------------------------
+    // Port cleanup — kill any leftover processes from previous runs before
+    // binding. Runs on startup and again on Ctrl-C to leave ports clean.
+    // -------------------------------------------------------------------------
+    let plc_ports: Vec<u16> = handle.read().await
+        .all_plcs()
+        .iter()
+        .map(|p| p.port)
+        .collect();
+
+    tracing::info!("Cleaning up ports before start: {:?}", plc_ports);
+    release_ports(&plc_ports);
+
+    // -------------------------------------------------------------------------
     // Spawn simulator — starts OPC-UA servers at the addresses the config
     // specifies. Skip this block to connect to real hardware instead.
     // -------------------------------------------------------------------------
-    tracing::info!("Spawning simulator module");
+    tracing::info!("Spawning simulator ({} PLC(s))", plc_ports.len());
     SimulatorModule::spawn(Arc::clone(&handle)).await?;
+    tracing::info!("Simulator running — OPC-UA servers bound on ports {:?}", plc_ports);
 
     // -------------------------------------------------------------------------
     // Start connectors — derived from the plant config, not the simulator.
@@ -59,10 +79,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let endpoints = handle.read().await.endpoint_configs();
     let tick_ms   = handle.read().await.default_tick_ms();
 
-    tracing::info!("Starting {} connector(s)", endpoints.len());
+    tracing::info!("Starting {} connector(s) at {}ms tick", endpoints.len(), tick_ms);
     for endpoint in endpoints {
         match endpoint.protocol.as_str() {
             "opcua" => {
+                tracing::info!("  [opcua] {} → {}", endpoint.name, endpoint.url);
                 let (name, connector) = ScadaPlcConnector::new(endpoint);
                 GenericConnector::new(name, connector, tick_ms, Arc::clone(&ingested)).start();
             }
@@ -77,9 +98,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // comms::ws_bridge::start(Arc::clone(&ingested)).await?;
     // -------------------------------------------------------------------------
 
-    tracing::info!("Running — press Ctrl-C to stop");
+    tracing::info!("=== Running — press Ctrl-C to stop ===");
     tokio::signal::ctrl_c().await?;
-    tracing::info!("Shutting down");
+
+    tracing::info!("Ctrl-C received — shutting down");
+    release_ports(&plc_ports);
+    tracing::info!("=== Shutdown complete ===");
 
     Ok(())
 }

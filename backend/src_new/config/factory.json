@@ -1,15 +1,16 @@
 {
   "plant_id": "plant_001",
   "name": "Demo Plant",
-  "description": "Single-line water heating demo",
+  "description": "Two-PLC water heating demo",
   "default_tick_ms": 100,
   "plcs": [
     {
       "plc_id": "plc_001",
-      "name": "Main PLC",
+      "name": "Heating PLC",
+      "protocol": "opcua",
       "uri": "opc.tcp://localhost",
       "port": 4840,
-      "endpoint": "/freeopcua/server/",
+      "endpoint": "/",
       "devices": [
         {
           "device_id": "boiler_001",
@@ -33,19 +34,38 @@
             "target_pressure": 3.0,
             "kp": 0.05
           }
-        },
+        }
+      ]
+    },
+    {
+      "plc_id": "plc_002",
+      "name": "Flow PLC",
+      "protocol": "opcua",
+      "uri": "opc.tcp://localhost",
+      "port": 4841,
+      "endpoint": "/",
+      "devices": [
         {
           "device_id": "flow_meter_001",
-          "name": "Flow Meter",
+          "name": "Main Flow Meter",
           "device_type": "FlowMeter",
-          "tick_ms": 500,
           "input_variables": [
-            { "name": "inlet_pressure", "source_device_id": "valve_001",  "source_field": "outlet_pressure" },
-            { "name": "valve_position", "source_device_id": "valve_001",  "source_field": "position" }
+            { "name": "inlet_pressure", "source_device_id": "valve_001", "source_field": "outlet_pressure" },
+            { "name": "valve_position", "source_device_id": "valve_001", "source_field": "position" }
           ],
           "params": {
             "coefficient": 10.0,
             "accumulate_volume": 1.0
+          }
+        },
+        {
+          "device_id": "flow_meter_002",
+          "name": "Bypass Flow Meter",
+          "device_type": "FlowMeter",
+          "input_variables": [],
+          "params": {
+            "coefficient": 5.0,
+            "accumulate_volume": 0.0
           }
         }
       ]

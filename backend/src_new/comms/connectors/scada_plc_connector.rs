@@ -76,14 +76,26 @@ impl ConnectorImpl for ScadaPlcConnector {
         let s = conn.session.read();
 
         for node in &self.node_reads {
-            let value = read_node(&s, &node.node_id, &node.data_type)
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-                    format!("{}.{}: {}", self.plc_name, node.metric_name, e).into()
-                })?;
-            partial
-                .entry(node.device_id.clone())
-                .or_default()
-                .insert(node.metric_name.clone(), value);
+            match read_node(&s, &node.node_id, &node.data_type) {
+                Ok(value) => {
+                    tracing::debug!(
+                        "{}.{}.{} = {:?}",
+                        self.plc_name, node.device_id, node.metric_name, value
+                    );
+                    partial
+                        .entry(node.device_id.clone())
+                        .or_default()
+                        .insert(node.metric_name.clone(), value);
+                }
+                Err(e) => {
+                    // One failed read poisons the whole poll — triggers reconnect in GenericConnector.
+                    // If this fires, check that node_id format matches what plc_server registers.
+                    return Err(format!(
+                        "[{}] node '{}' read failed: {}",
+                        self.plc_name, node.node_id, e
+                    ).into());
+                }
+            }
         }
 
         Ok(partial)
@@ -105,7 +117,9 @@ fn connect_to_plc(
         .trust_server_certs(true)
         .session_retry_limit(3)
         .client()
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+        .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
+            "ClientBuilder::client() returned None — check OPC-UA config".into()
+        })?;
 
     let session = client
         .connect_to_endpoint(
@@ -117,7 +131,7 @@ fn connect_to_plc(
             ),
             IdentityToken::Anonymous,
         )
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.to_string().into() })?;
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { format!("{:?}", e).into() })?;
 
     Ok((client, session))
 }

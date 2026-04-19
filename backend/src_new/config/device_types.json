@@ -13,9 +13,7 @@
         {
           "name": "set_target_temperature",
           "description": "Set the boiler target temperature",
-          "kind": "SetFieldFromArg",
-          "field": "target_temperature",
-          "arg_index": 0
+          "kind": { "SetFieldFromArg": { "field": "target_temperature", "arg_index": 0 } }
         }
       ],
       "metrics": [
@@ -37,16 +35,12 @@
         {
           "name": "open",
           "description": "Fully open the valve",
-          "kind": "SetField",
-          "field": "position",
-          "value": 1.0
+          "kind": { "SetField": { "field": "position", "value": 1.0 } }
         },
         {
           "name": "close",
           "description": "Fully close the valve",
-          "kind": "SetField",
-          "field": "position",
-          "value": 0.0
+          "kind": { "SetField": { "field": "position", "value": 0.0 } }
         }
       ],
       "metrics": [
@@ -66,10 +60,10 @@
       ],
       "functions": [],
       "metrics": [
-        { "name": "flow_rate",      "description": "Current flow rate (L/min)",     "data_type": "Float", "initial_value": 0.0 },
-        { "name": "total_volume",   "description": "Total volume passed (L)",       "data_type": "Float", "initial_value": 0.0 },
-        { "name": "inlet_pressure", "description": "Upstream pressure (bar)",       "data_type": "Float", "initial_value": 0.0 },
-        { "name": "valve_position", "description": "Upstream valve position (0–1)", "data_type": "Float", "initial_value": 0.0 },
+        { "name": "flow_rate",      "description": "Current flow rate (L/min)",     "data_type": "Float", "initial_value": 0.0   },
+        { "name": "total_volume",   "description": "Total volume passed (L)",       "data_type": "Float", "initial_value": 0.0   },
+        { "name": "inlet_pressure", "description": "Upstream pressure (bar)",       "data_type": "Float", "initial_value": 0.0   },
+        { "name": "valve_position", "description": "Upstream valve position (0-1)", "data_type": "Float", "initial_value": 0.0   },
         { "name": "status",         "description": "Flow status",                   "data_type": "Str",   "initial_value": "Low" }
       ]
     }

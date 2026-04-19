@@ -3,12 +3,12 @@ use crate::models::PlantConfig;
 /// Loads and saves factory.json.
 /// Pure file I/O — no runtime state, no simulation concerns.
 /// Hand the result to FactoryHandle::new() at startup.
-pub struct PlantStore {
+pub struct PlantRegistry {
     path:   String,
     config: PlantConfig,
 }
 
-impl PlantStore {
+impl PlantRegistry {
     /// Load plant config from a JSON file.
     pub fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
         let content = std::fs::read_to_string(path)?;

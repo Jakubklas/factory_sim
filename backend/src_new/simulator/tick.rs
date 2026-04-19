@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use crate::simulator::{PlantHandle, PhysicsEngine};
+use crate::simulator::{PlantConfigHandle, PhysicsEngine};
 use crate::models::PhysicsMode;
 
 /// Pre-computed device execution order, built once at startup from the wiring graph.
@@ -12,7 +12,7 @@ pub struct TickPlan {
 impl TickPlan {
     /// Build the execution order from the current wiring.
     /// Returns an error if the wiring graph contains a cycle.
-    pub fn build(handle: &PlantHandle) -> Result<Self, String> {
+    pub fn build(handle: &PlantConfigHandle) -> Result<Self, String> {
         let devices = handle.resolved_devices();
 
         // Map device_id → list of device_ids it depends on (its upstream sources)
@@ -88,12 +88,12 @@ impl TickPlan {
 ///   1. Copy input variable values from upstream devices' live state into this device's state.
 ///      (e.g. Valve's outlet_pressure → FlowMeter's inlet_pressure)
 ///   2. Run the physics script via PhysicsEngine.
-///   3. Write the updated state back into PlantHandle.
+///   3. Write the updated state back into PlantConfigHandle.
 ///
 /// Live devices (PhysicsMode::Live) skip step 2 — their state is written
 /// directly by the OPC-UA reader in comms/.
 pub fn tick(
-    handle:  &mut PlantHandle,
+    handle:  &mut PlantConfigHandle,
     plan:    &TickPlan,
     physics: &PhysicsEngine,
     dt:      f64,

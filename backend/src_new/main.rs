@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 
@@ -8,8 +8,8 @@ mod config_handle;
 mod simulator;
 mod comms;
 
-use config_handle::{DeviceTypeRegistry, PlantStore};
-use simulator::{PlantHandle, PhysicsEngine, TickPlan, tick};
+use config_handle::{DeviceTypeRegistry, PlantRegistry, PlantConfigHandle};
+use simulator::SimulatorModule;
 use comms::{GenericConnector, IngestedState, ScadaPlcConnector};
 
 #[tokio::main]
@@ -33,101 +33,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let factory_path      = binary_dir.join("config/factory.json");
 
     // -------------------------------------------------------------------------
-    // Load config
+    // Load config and build the plant config handle — source of truth for
+    // both the simulator and the connector layer
     // -------------------------------------------------------------------------
     tracing::info!("Loading device type registry from {}", device_types_path.display());
     let type_registry = DeviceTypeRegistry::load(device_types_path.to_str().unwrap())?;
 
     tracing::info!("Loading plant config from {}", factory_path.display());
-    let plant_store = PlantStore::load(factory_path.to_str().unwrap())?;
+    let plant_registry = PlantRegistry::load(factory_path.to_str().unwrap())?;
+
+    let handle = PlantConfigHandle::new(type_registry, plant_registry)?;
 
     // -------------------------------------------------------------------------
-    // Build runtime handle
+    // Spawn simulator — starts OPC-UA servers at the addresses the config
+    // specifies. Skip this block to connect to real hardware instead.
     // -------------------------------------------------------------------------
-    tracing::info!("Building factory handle");
-    let handle: Arc<RwLock<PlantHandle>> = PlantHandle::new(type_registry, plant_store)?;
+    tracing::info!("Spawning simulator module");
+    SimulatorModule::spawn(Arc::clone(&handle)).await?;
 
     // -------------------------------------------------------------------------
-    // Compile physics scripts (fails fast on syntax errors)
+    // Start connectors — derived from the plant config, not the simulator.
+    // Protocol field on each PLC selects the ConnectorImpl at compile time.
     // -------------------------------------------------------------------------
-    tracing::info!("Compiling physics scripts");
-    let physics = {
-        let h = handle.read().await;
-        let device_types: Vec<_> = h.resolved_devices()
-            .iter()
-            .map(|d| d.type_def.clone())
-            .collect();
-        PhysicsEngine::new(&device_types)?
-    };
-    let physics = Arc::new(physics);
+    let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(HashMap::new()));
+    let endpoints = handle.read().await.endpoint_configs();
+    let tick_ms   = handle.read().await.default_tick_ms();
 
-    // -------------------------------------------------------------------------
-    // Build tick execution plan (topological sort — fails on wiring cycles)
-    // -------------------------------------------------------------------------
-    tracing::info!("Building tick plan");
-    let plan = {
-        let h = handle.read().await;
-        TickPlan::build(&h)?
-    };
-    let plan = Arc::new(plan);
-
-    tracing::info!("Startup complete — devices in tick order: {:?}", plan.order());
-
-    // -------------------------------------------------------------------------
-    // Spawn tick loop
-    // -------------------------------------------------------------------------
-    let tick_handle   = Arc::clone(&handle);
-    let tick_physics  = Arc::clone(&physics);
-    let tick_plan     = Arc::clone(&plan);
-
-    tokio::spawn(async move {
-        let default_tick_ms = {
-            tick_handle.read().await.default_tick_ms()
-        };
-        let interval = Duration::from_millis(default_tick_ms);
-
-        loop {
-            let tick_start = Instant::now();
-
-            {
-                let mut h = tick_handle.write().await;
-                tick(&mut h, &tick_plan, &tick_physics, interval.as_secs_f64());
+    tracing::info!("Starting {} connector(s)", endpoints.len());
+    for endpoint in endpoints {
+        match endpoint.protocol.as_str() {
+            "opcua" => {
+                let (name, connector) = ScadaPlcConnector::new(endpoint);
+                GenericConnector::new(name, connector, tick_ms, Arc::clone(&ingested)).start();
             }
-
-            // Sleep for whatever is left of the tick interval
-            let elapsed = tick_start.elapsed();
-            if let Some(remaining) = interval.checked_sub(elapsed) {
-                tokio::time::sleep(remaining).await;
-            } else {
-                tracing::warn!("Tick overran by {:?}", elapsed - interval);
+            other => {
+                tracing::warn!("Skipping PLC '{}': unknown protocol '{}'", endpoint.name, other);
             }
-        }
-    });
-
-    // -------------------------------------------------------------------------
-    // -------------------------------------------------------------------------
-    // Spawn comms layer
-    // -------------------------------------------------------------------------
-
-    // 1. PLC server — exposes simulated devices as OPC-UA endpoints
-    comms::plc_server::start(Arc::clone(&handle)).await?;
-
-    // 2. SCADA connectors — one thread per PLC endpoint, polls into IngestedState
-    let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(std::collections::HashMap::new()));
-    {
-        let h = handle.read().await;
-        let tick_ms = h.default_tick_ms();
-        tracing::info!("Starting {} SCADA connector(s)", h.all_plcs().len());
-        for plc in h.all_plcs() {
-            GenericConnector::new(&plc.name, ScadaPlcConnector::new(plc, &h), tick_ms, Arc::clone(&ingested)).start();
         }
     }
 
-    // 3. TODO: ws_bridge — streams IngestedState to frontend
-    //    comms::ws_bridge::start(Arc::clone(&ingested)).await?;
+    // -------------------------------------------------------------------------
+    // TODO: ws_bridge — streams IngestedState to frontend
+    // comms::ws_bridge::start(Arc::clone(&ingested)).await?;
     // -------------------------------------------------------------------------
 
-    // Keep main alive until Ctrl-C
     tracing::info!("Running — press Ctrl-C to stop");
     tokio::signal::ctrl_c().await?;
     tracing::info!("Shutting down");

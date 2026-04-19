@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::models::{DataType, DeviceConfig, DeviceTypeDefinition, PlantConfig, PlcConfig};
-use crate::config_handle::{DeviceTypeRegistry, PlantStore};
+use crate::models::{DataType, DeviceConfig, DeviceTypeDefinition, PlantConfig, PlcConfig, PlcEndpointConfig, NodeReadConfig};
+use super::{DeviceTypeRegistry, PlantRegistry};
 
 // Type aliases to keep signatures readable
 type DeviceId  = String;
@@ -24,26 +24,26 @@ impl ResolvedDevice {
 
 /// Runtime handle for a loaded plant.
 /// Owns the static config tree, the type registry, resolved devices, and all live state.
-/// Wrap in Arc<RwLock<PlantHandle>> and share across threads.
-pub struct PlantHandle {
+/// Wrap in Arc<RwLock<PlantConfigHandle>> and share across threads.
+pub struct PlantConfigHandle {
     config:   PlantConfig,
     registry: HashMap<String, DeviceTypeDefinition>,  // device_type → definition
     devices:  Vec<ResolvedDevice>,                    // all devices, type already merged in
     state:    LiveState,                              // live field values, mutated every tick
 }
 
-impl PlantHandle {
+impl PlantConfigHandle {
     // -------------------------------------------------------------------------
     // Loading
     // -------------------------------------------------------------------------
 
     /// Build the runtime handle from already-loaded config and registry.
-    /// File I/O is handled upstream by DeviceTypeRegistry and PlantStore.
+    /// File I/O is handled upstream by DeviceTypeRegistry and PlantRegistry.
     /// Validates that all instance params satisfy their type's required_params.
     /// Seeds live state from each type's metric initial_values.
     pub fn new(
         type_registry: DeviceTypeRegistry,
-        plant_store:   PlantStore,
+        plant_store:   PlantRegistry,
     ) -> Result<Arc<RwLock<Self>>, Box<dyn std::error::Error>> {
         let config = plant_store.into_config();
         let registry: HashMap<String, DeviceTypeDefinition> = type_registry
@@ -179,5 +179,42 @@ impl PlantHandle {
 
     pub fn all_plcs(&self) -> &[PlcConfig] {
         &self.config.plcs
+    }
+
+    // -------------------------------------------------------------------------
+    // Connector config — source of truth for the platform's connector layer
+    // -------------------------------------------------------------------------
+
+    /// Build one PlcEndpointConfig per PLC from the resolved plant config.
+    /// This is what the connector layer uses to know what to poll and how.
+    /// For simulated PLCs, the simulator starts servers at these same addresses.
+    /// For real PLCs, connectors connect directly — no simulator involved.
+    pub fn endpoint_configs(&self) -> Vec<PlcEndpointConfig> {
+        self.config.plcs.iter().map(|plc| {
+            let url = format!("{}:{}{}", plc.uri, plc.port, plc.endpoint);
+            let plc_device_ids: Vec<&str> = plc.devices.iter()
+                .map(|d| d.device_id.as_str())
+                .collect();
+
+            let node_reads = self.devices.iter()
+                .filter(|d| plc_device_ids.contains(&d.config.device_id.as_str()))
+                .flat_map(|d| {
+                    d.type_def.metrics.iter().map(move |m| NodeReadConfig {
+                        device_id:   d.config.device_id.clone(),
+                        metric_name: m.name.clone(),
+                        // Node ID format must match what plc_server registers in its address space
+                        node_id:     format!("ns=2;s={}.{}.{}", plc.name, d.config.device_id, m.name),
+                        data_type:   m.initial_value.clone().unwrap_or(DataType::Float(0.0)),
+                    })
+                })
+                .collect();
+
+            PlcEndpointConfig {
+                name:     plc.name.clone(),
+                protocol: plc.protocol.clone(),
+                url,
+                node_reads,
+            }
+        }).collect()
     }
 }

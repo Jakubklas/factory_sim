@@ -3,17 +3,19 @@ use tokio::sync::RwLock;
 use opcua::server::prelude::*;
 use opcua::server::config::{ServerConfig, TcpConfig};
 use opcua::server::server::Server;
-use crate::simulator::PlantHandle;
+use crate::config_handle::PlantConfigHandle;
 use crate::models::{DataType, PlcConfig};
 
 // ============================================================================
 // Entry point — one OPC-UA server per PLC
 // ============================================================================
 
-/// Start one OPC-UA server per PLC defined in the plant config.
-/// Each server exposes all of its devices' metrics as OPC-UA nodes.
-/// Node path convention: ns=2;s={plc_name}.{device_id}.{metric_name}
-pub async fn start(handle: Arc<RwLock<PlantHandle>>) -> Result<(), Box<dyn std::error::Error>> {
+/// Start one OPC-UA server per PLC in the plant config.
+/// Servers bind at the addresses the config specifies — connector layer reads
+/// those same addresses from PlantConfigHandle::endpoint_configs().
+pub async fn start(
+    handle: Arc<RwLock<PlantConfigHandle>>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let plcs = handle.read().await.all_plcs().to_vec();
 
     for plc in plcs {
@@ -28,13 +30,11 @@ pub async fn start(handle: Arc<RwLock<PlantHandle>>) -> Result<(), Box<dyn std::
 // ============================================================================
 
 async fn start_plc_server(
-    handle: Arc<RwLock<PlantHandle>>,
+    handle: Arc<RwLock<PlantConfigHandle>>,
     plc:    PlcConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Starting OPC-UA server '{}' on port {}", plc.name, plc.port);
 
-    // Pre-collect node specs from resolved devices so the server thread
-    // doesn't need async access during setup
     let node_specs: Vec<NodeSpec> = {
         let h = handle.read().await;
         collect_node_specs(&h, &plc)
@@ -75,7 +75,6 @@ async fn start_plc_server(
             .add_folder(&plc.name, &plc.name, &NodeId::objects_folder_id())
             .expect("Failed to create PLC folder");
 
-        // Group nodes by device for folder structure
         let mut device_ids_seen: Vec<String> = Vec::new();
         for spec in &node_specs {
             if !device_ids_seen.contains(&spec.device_id) {
@@ -116,25 +115,18 @@ async fn start_plc_server(
         let mut interval = tokio::time::interval(
             tokio::time::Duration::from_millis(tick_ms)
         );
-
         loop {
             interval.tick().await;
-
-            let state_snapshot = handle.read().await
-                .state_snapshot();
-
+            let state_snapshot = handle.read().await.state_snapshot();
             let mut as_ = address_space.write();
-
             for spec in &node_specs {
                 let value = state_snapshot
                     .get(&spec.device_id)
                     .and_then(|fields| fields.get(&spec.metric_name));
-
                 if let Some(data_type) = value {
                     let node_id = NodeId::new(2, spec.node_path.clone());
-                    let variant: Variant = datatype_to_variant(data_type);
                     let _ = as_.set_variable_value(
-                        node_id, variant,
+                        node_id, datatype_to_variant(data_type),
                         &DateTime::now(), &DateTime::now(),
                     );
                 }
@@ -161,16 +153,14 @@ async fn start_plc_server(
 // Helpers
 // ============================================================================
 
-/// Metadata for a single OPC-UA node, pre-collected at startup.
 struct NodeSpec {
-    device_id:    String,
-    metric_name:  String,
-    node_path:    String,    // "{plc_name}.{device_id}.{metric_name}"
+    device_id:     String,
+    metric_name:   String,
+    node_path:     String,   // "{plc_name}.{device_id}.{metric_name}"
     initial_value: DataType,
 }
 
-/// Collect one NodeSpec per metric for every device on this PLC.
-fn collect_node_specs(handle: &PlantHandle, plc: &PlcConfig) -> Vec<NodeSpec> {
+fn collect_node_specs(handle: &PlantConfigHandle, plc: &PlcConfig) -> Vec<NodeSpec> {
     let plc_device_ids: Vec<&str> = plc.devices.iter()
         .map(|d| d.device_id.as_str())
         .collect();

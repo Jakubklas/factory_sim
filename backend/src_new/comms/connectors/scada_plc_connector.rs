@@ -1,10 +1,8 @@
-use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use opcua::client::prelude::*;
 use opcua::sync::RwLock as OpcRwLock;
-use crate::models::DataType;
-use crate::simulator::PlantHandle;
+use crate::models::{DataType, PlcEndpointConfig};
 use crate::comms::generic_connector::{ConnectorImpl, PartialState};
 
 // ============================================================================
@@ -18,53 +16,50 @@ pub struct PlcConnection {
 }
 
 // ============================================================================
-// Per-node read spec — built once at startup from PlantHandle schema
+// Internal node read spec — built from PlcEndpointConfig at construction time
 // ============================================================================
 
 struct NodeRead {
     device_id:   String,
     metric_name: String,
-    node_id:     String,     // "ns=2;s={plc_name}.{device_id}.{metric_name}"
+    node_id:     String,
     data_type:   NodeDataType,
 }
 
 enum NodeDataType { Float, Str, Boolean }
 
 // ============================================================================
-// ScadaPlcConnector — one instance per PLC endpoint
+// ScadaPlcConnector — one instance per OPC-UA endpoint
 // ============================================================================
 
 pub struct ScadaPlcConnector {
-    plc_name:   String,
     endpoint:   String,
+    plc_name:   String,
     node_reads: Vec<NodeRead>,
 }
 
 impl ScadaPlcConnector {
-    pub fn new(plc: &PlcConfig, handle: &PlantHandle) -> Self {
-        let endpoint = format!("{}:{}{}", plc.uri, plc.port, plc.endpoint);
+    /// Build from a PlcEndpointConfig — works for both simulated and real PLCs.
+    /// No PlantConfigHandle or simulator knowledge needed.
+    pub fn new(config: PlcEndpointConfig) -> (String, Self) {
+        let node_reads = config.node_reads.into_iter().map(|n| NodeRead {
+            device_id:   n.device_id,
+            metric_name: n.metric_name,
+            node_id:     n.node_id,
+            data_type:   match n.data_type {
+                DataType::Float(_)   => NodeDataType::Float,
+                DataType::Str(_)     => NodeDataType::Str,
+                DataType::Boolean(_) => NodeDataType::Boolean,
+            },
+        }).collect();
 
-        let node_reads = handle.resolved_devices()
-            .iter()
-            .filter(|d| plc.devices.iter().any(|pd| pd.device_id == d.config.device_id))
-            .flat_map(|d| {
-                d.type_def.metrics.iter().map(move |m| {
-                    let data_type = match &m.data_type {
-                        DataType::Float(_)   => NodeDataType::Float,
-                        DataType::Str(_)     => NodeDataType::Str,
-                        DataType::Boolean(_) => NodeDataType::Boolean,
-                    };
-                    NodeRead {
-                        device_id:   d.config.device_id.clone(),
-                        metric_name: m.name.clone(),
-                        node_id:     format!("ns=2;s={}.{}.{}", plc.name, d.config.device_id, m.name),
-                        data_type,
-                    }
-                })
-            })
-            .collect();
+        let connector = Self {
+            plc_name:   config.name.clone(),
+            endpoint:   config.url,
+            node_reads,
+        };
 
-        Self { plc_name: plc.name.clone(), endpoint, node_reads }
+        (config.name, connector)
     }
 }
 
@@ -95,12 +90,11 @@ impl ConnectorImpl for ScadaPlcConnector {
     }
 }
 
-
 // ============================================================================
 // OPC-UA helpers
 // ============================================================================
 
-/// Single-attempt connect. Backoff and retry are handled by the generic runner.
+/// Single-attempt connect. Backoff and retry are handled by GenericConnector.
 fn connect_to_plc(
     endpoint: &str,
 ) -> Result<(Client, Arc<OpcRwLock<Session>>), Box<dyn std::error::Error + Send + Sync>> {

@@ -38,12 +38,13 @@ pub struct PlantConfig {
 
 /// A PLC (Programmable Logic Controller) — the physical OPC-UA endpoint.
 pub struct PlcConfig {
-    pub plc_id: String,
-    pub name: String,
-    pub uri: String,
-    pub port: u16,
+    pub plc_id:   String,
+    pub name:     String,
+    pub protocol: String,  // "opcua" | "modbus" — selects which ConnectorImpl to instantiate
+    pub uri:      String,
+    pub port:     u16,
     pub endpoint: String,
-    pub devices: Vec<DeviceConfig>,
+    pub devices:  Vec<DeviceConfig>,
 }
 
 /// A single device instance attached to a PLC.
@@ -83,4 +84,27 @@ pub struct DeviceMetric {
     pub description: String,
     pub data_type: DataType,
     pub initial_value: Option<DataType>,  // None → DataType default (0.0 / "" / false)
+}
+
+// ============================================================================
+// Connector config — derived from PlantConfigHandle; the contract between
+// the config layer and the connector layer. Connectors know nothing about
+// PlantConfigHandle or physics — they only consume this struct.
+// ============================================================================
+
+/// Everything a connector needs to poll one endpoint.
+/// Built by PlantConfigHandle::endpoint_configs() from the resolved plant config.
+pub struct PlcEndpointConfig {
+    pub name:       String,  // human-readable label used in logs
+    pub protocol:   String,  // "opcua" | "modbus" — determines which ConnectorImpl is used
+    pub url:        String,  // full endpoint URL: e.g. "opc.tcp://{host}:{port}{path}"
+    pub node_reads: Vec<NodeReadConfig>,
+}
+
+/// Spec for a single OPC-UA node the connector will poll each tick.
+pub struct NodeReadConfig {
+    pub device_id:   String,
+    pub metric_name: String,
+    pub node_id:     String,   // "ns=2;s={plc}.{device}.{metric}"
+    pub data_type:   DataType, // expected variant — used to cast the read result
 }

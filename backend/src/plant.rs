@@ -13,8 +13,31 @@ pub async fn start(
     handle:  Arc<RwLock<PlantConfigHandle>>,
     tick_ms: u64,
 ) -> Result<Arc<RwLock<IngestedState>>, Box<dyn std::error::Error>> {
-    let plcs      = handle.read().await.all_plcs().to_vec();
-    let endpoints = handle.read().await.endpoint_configs();
+    let (plcs, endpoints, plant_name) = {
+        let h = handle.read().await;
+        (h.all_plcs().to_vec(), h.endpoint_configs(), h.plant_config().name.clone())
+    };
+
+    let sim_count  = plcs.iter().filter(|p| p.simulated).count();
+    let live_count = plcs.len() - sim_count;
+    let dev_count: usize = plcs.iter().map(|p| p.devices.len()).sum();
+
+    let mut msg = format!(
+        "\n  Plant: \"{}\"  ·  {} PLC{}  ({} simulated, {} live)  ·  {} device{}\n",
+        plant_name,
+        plcs.len(), if plcs.len() == 1 { "" } else { "s" },
+        sim_count, live_count,
+        dev_count, if dev_count == 1 { "" } else { "s" },
+    );
+    for plc in &plcs {
+        let url = format!("{}:{}{}", plc.uri, plc.port, plc.endpoint);
+        let tag = if plc.simulated { "[sim] " } else { "[live]" };
+        let dev_ids: Vec<&str> = plc.devices.iter().map(|d| d.device_id.as_str()).collect();
+        msg.push_str(&format!("\n  {}  {:20}  {}\n", tag, plc.name, url));
+        msg.push_str(&format!("               {}\n", dev_ids.join(", ")));
+    }
+    msg.push('\n');
+    tracing::info!("{}", msg);
 
     if plcs.iter().any(|p| p.simulated) {
         SimulatorModule::start_physics(Arc::clone(&handle), tick_ms).await?;
@@ -30,7 +53,6 @@ pub async fn start(
 
         match endpoint.protocol.as_str() {
             "opcua" => {
-                tracing::info!("[opcua] {} → {}", endpoint.name, endpoint.url);
                 let (name, connector) = ScadaPlcConnector::new(endpoint);
                 GenericConnector::new(name, connector, tick_ms, Arc::clone(&ingested)).start();
             }

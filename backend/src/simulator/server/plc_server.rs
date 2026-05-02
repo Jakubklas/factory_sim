@@ -39,6 +39,7 @@ async fn start_plc_server(
     let mut server_config = ServerConfig::default();
     server_config.application_name = plc.name.clone();
     server_config.application_uri  = plc.uri.clone();
+    server_config.product_uri      = format!("urn:factory-sim:{}", plc.plc_id);
     server_config.create_sample_keypair = true;
     server_config.pki_dir = std::env::current_exe()
         .ok()

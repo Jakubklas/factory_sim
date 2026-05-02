@@ -29,7 +29,7 @@ impl SimulatorModule {
             Arc::new(TickPlan::build(&h)?)
         };
 
-        tracing::info!("Simulator tick order: {:?}", plan.order());
+        tracing::info!("Physics engine ready  ·  tick order: {}", plan.order().join(" → "));
 
         let tick_handle  = Arc::clone(&handle);
         let tick_physics = Arc::clone(&physics);

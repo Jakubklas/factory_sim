@@ -37,6 +37,16 @@ impl<'de> Deserialize<'de> for DataType {
     }
 }
 
+impl std::fmt::Display for DataType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DataType::Float(v)   => write!(f, "{:.2}", v),
+            DataType::Str(s)     => write!(f, "{}", s),
+            DataType::Boolean(b) => write!(f, "{}", b),
+        }
+    }
+}
+
 impl Serialize for DataType {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         match self {

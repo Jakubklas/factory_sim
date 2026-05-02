@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use crate::primitives::DataType;
 
@@ -57,8 +58,10 @@ impl<C: ConnectorImpl> GenericConnector<C> {
         loop {
             match self.impl_.connect() {
                 Ok(conn) => {
-                    if attempt > 0 {
-                        tracing::info!("Connector '{}' reconnected", self.name);
+                    if attempt == 0 {
+                        tracing::info!("Connector '{}' connected", self.name);
+                    } else {
+                        tracing::info!("Connector '{}' reconnected after {} attempt(s)", self.name, attempt);
                     }
                     return conn;
                 }
@@ -76,9 +79,10 @@ impl<C: ConnectorImpl> GenericConnector<C> {
     }
 
     fn run(self) {
-        tracing::info!("Connector '{}' starting", self.name);
         let mut conn = self.connect_with_backoff();
         let mut consecutive_failures: usize = 0;
+        let summary_every = Duration::from_secs(30);
+        let mut last_summary = Instant::now();
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(self.tick_ms));
@@ -86,6 +90,29 @@ impl<C: ConnectorImpl> GenericConnector<C> {
             match self.impl_.poll(&conn) {
                 Ok(partial) => {
                     consecutive_failures = 0;
+
+                    if last_summary.elapsed() >= summary_every {
+                        last_summary = Instant::now();
+                        let mut msg = format!(
+                            "\n\n  ── {} {}\n",
+                            self.name,
+                            "─".repeat(48_usize.saturating_sub(self.name.len()))
+                        );
+                        let mut device_ids: Vec<&String> = partial.keys().collect();
+                        device_ids.sort();
+                        for device_id in &device_ids {
+                            let fields = &partial[*device_id];
+                            let mut keys: Vec<&String> = fields.keys().collect();
+                            keys.sort();
+                            let pairs: Vec<String> = keys.iter()
+                                .map(|k| format!("{}={}", k, fields[*k]))
+                                .collect();
+                            msg.push_str(&format!("  {:20}  {}\n", device_id, pairs.join("  ")));
+                        }
+                        msg.push('\n');
+                        tracing::info!("{}", msg);
+                    }
+
                     tracing::debug!(
                         "Connector '{}' polled {} device(s): [{}]",
                         self.name,

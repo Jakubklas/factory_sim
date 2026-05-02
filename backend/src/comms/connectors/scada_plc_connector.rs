@@ -79,8 +79,8 @@ impl ConnectorImpl for ScadaPlcConnector {
         for node in &self.node_reads {
             match read_node(&s, &node.node_id, &node.data_type) {
                 Ok(value) => {
-                    tracing::debug!(
-                        "{}.{}.{} = {:?}",
+                    tracing::trace!(
+                        "{}.{}.{} = {}",
                         self.plc_name, node.device_id, node.metric_name, value
                     );
                     partial

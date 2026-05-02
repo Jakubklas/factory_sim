@@ -6,9 +6,9 @@ export function createBoiler(id: string, position: THREE.Vector3): THREE.Group {
 
   const bodyGeometry = new THREE.CylinderGeometry(2, 2, 8, 16);
   const bodyMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2a2a35,
-    roughness: 0.6,
-    metalness: 0.8,
+    color: 0x9090a0,
+    roughness: 0.5,
+    metalness: 0.7,
     emissive: 0x0044ff,
     emissiveIntensity: 0.0,
   });
@@ -31,8 +31,8 @@ export function createBoiler(id: string, position: THREE.Vector3): THREE.Group {
 export function updateBoilerState(
   boiler: THREE.Group,
   temperature: number,
-  targetTemperature: number,
-  status: string
+  _targetTemperature: number,
+  _status: string
 ) {
   const material = boiler.userData.material as THREE.MeshStandardMaterial;
 

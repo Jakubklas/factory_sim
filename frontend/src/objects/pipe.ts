@@ -12,8 +12,8 @@ export function createPipe(
 
   const pipeGeometry = new THREE.CylinderGeometry(0.3, 0.3, length, 8);
   const pipeMaterial = new THREE.MeshStandardMaterial({
-    color: 0x1a2a3a,
-    roughness: 0.7,
+    color: 0x607080,
+    roughness: 0.6,
     metalness: 0.8,
   });
 

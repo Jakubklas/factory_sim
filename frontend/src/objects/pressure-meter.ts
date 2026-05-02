@@ -6,8 +6,8 @@ export function createPressureMeter(id: string, position: THREE.Vector3): THREE.
 
   const standGeometry = new THREE.BoxGeometry(0.5, 3, 0.5);
   const standMaterial = new THREE.MeshStandardMaterial({
-    color: 0x3a3a45,
-    roughness: 0.7,
+    color: 0x8888a0,
+    roughness: 0.6,
     metalness: 0.6,
   });
   const stand = new THREE.Mesh(standGeometry, standMaterial);
@@ -17,11 +17,11 @@ export function createPressureMeter(id: string, position: THREE.Vector3): THREE.
 
   const dialGeometry = new THREE.SphereGeometry(1, 16, 16);
   const dialMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2a2a35,
-    roughness: 0.5,
+    color: 0x7070a0,
+    roughness: 0.4,
     metalness: 0.8,
     emissive: 0x00ff00,
-    emissiveIntensity: 0.2,
+    emissiveIntensity: 0.3,
   });
   const dial = new THREE.Mesh(dialGeometry, dialMaterial);
   dial.position.y = 3.5;
@@ -46,7 +46,7 @@ export function createPressureMeter(id: string, position: THREE.Vector3): THREE.
 
 export function updatePressureMeterState(
   meter: THREE.Group,
-  pressure: number,
+  _pressure: number,
   status: string
 ) {
   const material = meter.userData.material as THREE.MeshStandardMaterial;

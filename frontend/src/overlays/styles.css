@@ -2,7 +2,7 @@
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 11px;
   color: #e0e0e0;
-  background: rgba(10, 10, 20, 0.85);
+  background: rgba(10, 10, 20, 0.70);
   border: 1px solid #444466;
   border-radius: 4px;
   padding: 8px 12px;
@@ -10,6 +10,20 @@
   user-select: none;
   backdrop-filter: blur(4px);
   min-width: 150px;
+}
+
+.plc-label {
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  font-size: 10px;
+  color: #c8c8e0;
+  background: rgba(10, 10, 30, 0.65);
+  border: 1px solid #5555aa;
+  border-radius: 3px;
+  padding: 5px 9px;
+  pointer-events: none;
+  user-select: none;
+  backdrop-filter: blur(4px);
+  min-width: 110px;
 }
 
 .device-label[data-status="normal"] {

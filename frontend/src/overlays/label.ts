@@ -1,7 +1,7 @@
 import { CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer.js';
 
 export function createLabel(
-  id: string,
+  _id: string,
   content: string,
   status: string = 'Normal'
 ): CSS2DObject {
@@ -11,7 +11,18 @@ export function createLabel(
   div.innerHTML = content;
 
   const label = new CSS2DObject(div);
-  label.position.set(0, 5, 0);
+  label.position.set(0, 6.25, 0);
+
+  return label;
+}
+
+export function createPlcLabel(content: string): CSS2DObject {
+  const div = document.createElement('div');
+  div.className = 'plc-label';
+  div.innerHTML = content;
+
+  const label = new CSS2DObject(div);
+  label.position.set(0, 1.5, 0);
 
   return label;
 }
@@ -65,6 +76,16 @@ export function formatFlowMeterLabel(
       <div>${flowRate.toFixed(1)} L/min</div>
       <div>${totalVolume.toFixed(0)} L total</div>
       <div class="status-indicator">● ${status}</div>
+    </div>
+  `;
+}
+
+export function formatPlcLabel(name: string, protocol: string, simulated: boolean): string {
+  return `
+    <div class="label-header">${name.toUpperCase()}</div>
+    <div class="label-content">
+      <div>${protocol.toUpperCase()}</div>
+      <div>${simulated ? 'Simulated' : 'Live'}</div>
     </div>
   `;
 }

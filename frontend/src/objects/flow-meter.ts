@@ -6,8 +6,8 @@ export function createFlowMeter(id: string, position: THREE.Vector3): THREE.Grou
 
   const bodyGeometry = new THREE.BoxGeometry(2, 3, 2);
   const bodyMaterial = new THREE.MeshStandardMaterial({
-    color: 0x2a3a45,
-    roughness: 0.6,
+    color: 0x8898a8,
+    roughness: 0.5,
     metalness: 0.7,
   });
   const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
@@ -32,10 +32,10 @@ export function createFlowMeter(id: string, position: THREE.Vector3): THREE.Grou
 }
 
 export function updateFlowMeterState(
-  meter: THREE.Group,
-  flowRate: number,
-  totalVolume: number,
-  status: string
+  _meter: THREE.Group,
+  _flowRate: number,
+  _totalVolume: number,
+  _status: string
 ) {
   // TODO: Add animated particles showing flow
 }

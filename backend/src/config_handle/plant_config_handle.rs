@@ -141,6 +141,10 @@ impl PlantConfigHandle {
         &self.config.plcs
     }
 
+    pub fn plant_config(&self) -> &PlantConfig {
+        &self.config
+    }
+
     // -------------------------------------------------------------------------
     // Connector config — source of truth for the platform's connector layer
     // -------------------------------------------------------------------------

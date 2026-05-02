@@ -1,65 +1,43 @@
-type DeviceState = Record<string, any>;
+import type { FieldValues, PlantSnapshot } from './types';
+import { WsClient } from './ws-client';
+import { wsUrl } from '../config';
 
-interface PlantState {
-  devices: Record<string, DeviceState>;
-  subscribers: Map<string, Set<(state: DeviceState) => void>>;
+type StateCallback = (state: FieldValues) => void;
+
+const devices:     PlantSnapshot                    = {};
+const subscribers: Map<string, Set<StateCallback>>  = new Map();
+
+// ============================================================================
+// Public API
+// ============================================================================
+
+export function subscribe(deviceId: string, cb: StateCallback): () => void {
+  if (!subscribers.has(deviceId)) subscribers.set(deviceId, new Set());
+  subscribers.get(deviceId)!.add(cb);
+
+  // Replay current state immediately if already populated.
+  if (devices[deviceId]) cb(devices[deviceId]);
+
+  return () => subscribers.get(deviceId)?.delete(cb);
 }
 
-const plantState: PlantState = {
-  devices: {},
-  subscribers: new Map(),
-};
-
-export function subscribe(
-  deviceId: string,
-  callback: (state: DeviceState) => void
-): () => void {
-  if (!plantState.subscribers.has(deviceId)) {
-    plantState.subscribers.set(deviceId, new Set());
-  }
-
-  plantState.subscribers.get(deviceId)!.add(callback);
-
-  if (plantState.devices[deviceId]) {
-    callback(plantState.devices[deviceId]);
-  }
-
-  return () => {
-    plantState.subscribers.get(deviceId)?.delete(callback);
-  };
+export function connectToBackend(): void {
+  new WsClient({
+    url:     wsUrl(),
+    onFrame: (data) => ingest(JSON.parse(data) as PlantSnapshot),
+  }).connect();
 }
 
-export function updatePlantState(devices: Record<string, DeviceState>) {
-  for (const [deviceId, deviceState] of Object.entries(devices)) {
-    const previousState = plantState.devices[deviceId];
-    plantState.devices[deviceId] = deviceState;
+// ============================================================================
+// Internal
+// ============================================================================
 
-    if (hasChanged(previousState, deviceState)) {
-      notifySubscribers(deviceId, deviceState);
+function ingest(snapshot: PlantSnapshot): void {
+  for (const [deviceId, fields] of Object.entries(snapshot)) {
+    const prev = devices[deviceId];
+    devices[deviceId] = fields;
+    if (!prev || JSON.stringify(prev) !== JSON.stringify(fields)) {
+      subscribers.get(deviceId)?.forEach(cb => cb(fields));
     }
   }
-}
-
-function hasChanged(
-  previous: DeviceState | undefined,
-  current: DeviceState
-): boolean {
-  if (!previous) return true;
-
-  return JSON.stringify(previous) !== JSON.stringify(current);
-}
-
-function notifySubscribers(deviceId: string, state: DeviceState) {
-  const subscribers = plantState.subscribers.get(deviceId);
-  if (subscribers) {
-    subscribers.forEach((callback) => callback(state));
-  }
-}
-
-export function getDeviceState(deviceId: string): DeviceState | undefined {
-  return plantState.devices[deviceId];
-}
-
-export function getAllDevices(): Record<string, DeviceState> {
-  return { ...plantState.devices };
 }

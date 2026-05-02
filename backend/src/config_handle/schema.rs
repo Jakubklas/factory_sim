@@ -42,7 +42,7 @@ pub struct DeviceMetric {
 // Plant → PLC → Device hierarchy  (loaded from factory.json)
 // ============================================================================
 
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct PlantConfig {
     pub plant_id:    String,
     pub name:        String,

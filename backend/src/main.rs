@@ -25,9 +25,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let ingested    = plant::start(handle.clone(), app.tick_ms).await?;
     let ingested_ws = ingested.clone();
+    let handle_ws   = handle.clone();
     let ws_host     = app.ws_host.clone();
     tokio::spawn(async move {
-        if let Err(e) = api::ws_bridge::start(ingested_ws, app.tick_ms, &ws_host, app.ws_port).await {
+        if let Err(e) = api::ws_bridge::start(ingested_ws, handle_ws, app.tick_ms, &ws_host, app.ws_port).await {
             tracing::error!("WS bridge error: {}", e);
         }
     });

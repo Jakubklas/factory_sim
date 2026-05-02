@@ -6,8 +6,8 @@ export function createValve(id: string, position: THREE.Vector3): THREE.Group {
 
   const flangeGeometry = new THREE.CylinderGeometry(1.5, 1.5, 0.5, 16);
   const flangeMaterial = new THREE.MeshStandardMaterial({
-    color: 0x3a3a45,
-    roughness: 0.6,
+    color: 0x9090a8,
+    roughness: 0.5,
     metalness: 0.8,
   });
 
@@ -44,8 +44,8 @@ export function createValve(id: string, position: THREE.Vector3): THREE.Group {
 export function updateValveState(
   valve: THREE.Group,
   position: number,
-  mode: string,
-  status: string
+  _mode: string,
+  _status: string
 ) {
   const handle = valve.userData.handle as THREE.Mesh;
 

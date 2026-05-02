@@ -29,10 +29,10 @@ export function setupScene(container: HTMLElement) {
   controls.minDistance = 10;
   controls.maxDistance = 100;
 
-  const ambientLight = new THREE.AmbientLight(0x404060, 0.3);
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
   scene.add(ambientLight);
 
-  const mainLight = new THREE.DirectionalLight(0xffffff, 0.5);
+  const mainLight = new THREE.DirectionalLight(0xffffff, 1.8);
   mainLight.position.set(20, 30, 20);
   mainLight.castShadow = true;
   mainLight.shadow.camera.left = -50;
@@ -41,12 +41,16 @@ export function setupScene(container: HTMLElement) {
   mainLight.shadow.camera.bottom = -50;
   scene.add(mainLight);
 
-  const warmLight = new THREE.PointLight(0xff8844, 0.8, 30);
-  warmLight.position.set(-10, 5, 0);
+  const fillLight = new THREE.DirectionalLight(0x8090b0, 0.8);
+  fillLight.position.set(-15, 20, 30);
+  scene.add(fillLight);
+
+  const warmLight = new THREE.PointLight(0xff9955, 1.5, 60);
+  warmLight.position.set(-10, 8, 5);
   scene.add(warmLight);
 
-  const coolLight = new THREE.PointLight(0x4488ff, 0.6, 30);
-  coolLight.position.set(10, 5, 0);
+  const coolLight = new THREE.PointLight(0x5599ff, 1.2, 60);
+  coolLight.position.set(10, 8, 5);
   scene.add(coolLight);
 
   return { scene, camera, renderer, controls };

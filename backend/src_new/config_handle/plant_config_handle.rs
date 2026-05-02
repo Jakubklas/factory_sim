@@ -137,10 +137,6 @@ impl PlantConfigHandle {
     // Config lookups
     // -------------------------------------------------------------------------
 
-    pub fn default_tick_ms(&self) -> u64 {
-        self.config.default_tick_ms
-    }
-
     pub fn all_plcs(&self) -> &[PlcConfig] {
         &self.config.plcs
     }

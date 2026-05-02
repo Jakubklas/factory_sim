@@ -2,7 +2,6 @@
   "plant_id": "plant_001",
   "name": "Demo Plant",
   "description": "Two-PLC water heating demo",
-  "default_tick_ms": 100,
   "plcs": [
     {
       "plc_id": "plc_001",

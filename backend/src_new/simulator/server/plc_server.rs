@@ -14,15 +14,17 @@ use crate::config_handle::PlcConfig;
 
 /// Start the OPC-UA server for one PLC.
 pub async fn start_one(
-    handle: Arc<RwLock<PlantConfigHandle>>,
-    plc:    PlcConfig,
+    handle:  Arc<RwLock<PlantConfigHandle>>,
+    plc:     PlcConfig,
+    tick_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    start_plc_server(handle, plc).await
+    start_plc_server(handle, plc, tick_ms).await
 }
 
 async fn start_plc_server(
-    handle: Arc<RwLock<PlantConfigHandle>>,
-    plc:    PlcConfig,
+    handle:  Arc<RwLock<PlantConfigHandle>>,
+    plc:     PlcConfig,
+    tick_ms: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Starting OPC-UA server '{}' on port {}", plc.name, plc.port);
 
@@ -103,7 +105,6 @@ async fn start_plc_server(
     // -------------------------------------------------------------------------
     let address_space = server.address_space();
     let plc_name      = plc.name.clone();
-    let tick_ms       = handle.read().await.default_tick_ms();
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(

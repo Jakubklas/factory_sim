@@ -12,7 +12,8 @@ impl SimulatorModule {
     /// Call once before starting any per-PLC servers.
     /// Fails fast if any script has a syntax error or wiring is cyclic.
     pub async fn start_physics(
-        handle: Arc<RwLock<PlantConfigHandle>>,
+        handle:  Arc<RwLock<PlantConfigHandle>>,
+        tick_ms: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let physics = {
             let h = handle.read().await;
@@ -35,7 +36,6 @@ impl SimulatorModule {
         let tick_plan    = Arc::clone(&plan);
 
         tokio::spawn(async move {
-            let tick_ms  = tick_handle.read().await.default_tick_ms();
             let interval = Duration::from_millis(tick_ms);
             loop {
                 let tick_start = Instant::now();
@@ -57,9 +57,10 @@ impl SimulatorModule {
 
     /// Start the OPC-UA server for a single simulated PLC.
     pub async fn start_server(
-        handle: Arc<RwLock<PlantConfigHandle>>,
-        plc:    PlcConfig,
+        handle:  Arc<RwLock<PlantConfigHandle>>,
+        plc:     PlcConfig,
+        tick_ms: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        plc_server::start_one(handle, plc).await
+        plc_server::start_one(handle, plc, tick_ms).await
     }
 }

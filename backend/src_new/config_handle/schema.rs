@@ -44,11 +44,10 @@ pub struct DeviceMetric {
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct PlantConfig {
-    pub plant_id:        String,
-    pub name:            String,
-    pub description:     String,
-    pub default_tick_ms: u64,
-    pub plcs:            Vec<PlcConfig>,
+    pub plant_id:    String,
+    pub name:        String,
+    pub description: String,
+    pub plcs:        Vec<PlcConfig>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]

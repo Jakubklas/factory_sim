@@ -121,7 +121,7 @@ fn connect_to_plc(
         .application_uri("urn:factory-sim-scada")
         .create_sample_keypair(true)
         .trust_server_certs(true)
-        .session_retry_limit(3)
+        .session_retry_limit(0)
         .pki_dir(pki_dir)
         .client()
         .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {

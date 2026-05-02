@@ -7,10 +7,6 @@ type StateCallback = (state: FieldValues) => void;
 const devices:     PlantSnapshot                    = {};
 const subscribers: Map<string, Set<StateCallback>>  = new Map();
 
-// ============================================================================
-// Public API
-// ============================================================================
-
 export function subscribe(deviceId: string, cb: StateCallback): () => void {
   if (!subscribers.has(deviceId)) subscribers.set(deviceId, new Set());
   subscribers.get(deviceId)!.add(cb);
@@ -27,10 +23,6 @@ export function connectToBackend(): void {
     onFrame: (data) => ingest(JSON.parse(data) as PlantSnapshot),
   }).connect();
 }
-
-// ============================================================================
-// Internal
-// ============================================================================
 
 function ingest(snapshot: PlantSnapshot): void {
   for (const [deviceId, fields] of Object.entries(snapshot)) {

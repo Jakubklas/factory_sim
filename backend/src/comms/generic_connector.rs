@@ -78,20 +78,20 @@ impl<C: ConnectorImpl> GenericConnector<C> {
     fn run(self) {
         tracing::info!("Connector '{}' starting", self.name);
         let mut conn = self.connect_with_backoff();
+        let mut consecutive_failures: usize = 0;
 
         loop {
             std::thread::sleep(std::time::Duration::from_millis(self.tick_ms));
 
             match self.impl_.poll(&conn) {
                 Ok(partial) => {
+                    consecutive_failures = 0;
                     tracing::debug!(
                         "Connector '{}' polled {} device(s): [{}]",
                         self.name,
                         partial.len(),
                         partial.keys().cloned().collect::<Vec<_>>().join(", ")
                     );
-                    // Partial write: only overwrite keys owned by this connector.
-                    // Other connectors' device entries are left untouched.
                     if let Ok(mut state) = self.ingested.try_write() {
                         for (device_id, fields) in partial {
                             state.entry(device_id).or_default().extend(fields);
@@ -99,10 +99,13 @@ impl<C: ConnectorImpl> GenericConnector<C> {
                     }
                 }
                 Err(e) => {
+                    consecutive_failures += 1;
+                    let delay = self.backoff_secs[consecutive_failures.min(self.backoff_secs.len() - 1)];
                     tracing::warn!(
-                        "Connector '{}' poll failed — reconnecting: {}",
-                        self.name, e
+                        "Connector '{}' poll failed (attempt {}) — waiting {}s before reconnect: {}",
+                        self.name, consecutive_failures, delay, e
                     );
+                    std::thread::sleep(std::time::Duration::from_secs(delay));
                     conn = self.connect_with_backoff();
                 }
             }

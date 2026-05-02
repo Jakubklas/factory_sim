@@ -47,11 +47,11 @@ async fn start_plc_server(
     server_config.discovery_server_url = None;
     server_config.tcp_config = TcpConfig {
         hello_timeout: 10,
-        host: "0.0.0.0".to_string(),
+        host: "localhost".to_string(),
         port: plc.port,
     };
     server_config.discovery_urls = vec![
-        format!("opc.tcp://0.0.0.0:{}", plc.port)
+        format!("opc.tcp://localhost:{}", plc.port)
     ];
     server_config.endpoints.insert(
         "none".to_string(),

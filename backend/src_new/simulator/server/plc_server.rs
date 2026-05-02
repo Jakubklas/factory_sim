@@ -12,24 +12,13 @@ use crate::config_handle::PlcConfig;
 // Entry point — one OPC-UA server per PLC
 // ============================================================================
 
-/// Start one OPC-UA server per PLC in the plant config.
-/// Servers bind at the addresses the config specifies — connector layer reads
-/// those same addresses from PlantConfigHandle::endpoint_configs().
-pub async fn start(
+/// Start the OPC-UA server for one PLC.
+pub async fn start_one(
     handle: Arc<RwLock<PlantConfigHandle>>,
+    plc:    PlcConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let plcs = handle.read().await.all_plcs().to_vec();
-
-    for plc in plcs {
-        start_plc_server(Arc::clone(&handle), plc).await?;
-    }
-
-    Ok(())
+    start_plc_server(handle, plc).await
 }
-
-// ============================================================================
-// Per-PLC server
-// ============================================================================
 
 async fn start_plc_server(
     handle: Arc<RwLock<PlantConfigHandle>>,

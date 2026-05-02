@@ -7,6 +7,7 @@
     {
       "plc_id": "plc_001",
       "name": "Heating PLC",
+      "simulated": true,
       "protocol": "opcua",
       "uri": "opc.tcp://localhost",
       "port": 4840,
@@ -40,6 +41,7 @@
     {
       "plc_id": "plc_002",
       "name": "Flow PLC",
+      "simulated": true,
       "protocol": "opcua",
       "uri": "opc.tcp://localhost",
       "port": 4841,

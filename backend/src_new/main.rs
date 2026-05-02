@@ -51,44 +51,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let handle = PlantConfigHandle::new(type_registry, plant_registry)?;
 
     // -------------------------------------------------------------------------
-    // Port cleanup — kill any leftover processes from previous runs before
-    // binding. Runs on startup and again on Ctrl-C to leave ports clean.
+    // Per-PLC startup: simulated PLCs get a simulator server, all PLCs get
+    // a connector. Physics tick loop starts once if any PLCs are simulated.
     // -------------------------------------------------------------------------
-    let plc_ports: Vec<u16> = handle.read().await
-        .all_plcs()
-        .iter()
-        .map(|p| p.port)
-        .collect();
-
-    tracing::info!("Cleaning up ports before start: {:?}", plc_ports);
-    release_ports(&plc_ports);
-
-    // -------------------------------------------------------------------------
-    // Spawn simulator — starts OPC-UA servers at the addresses the config
-    // specifies. Skip this block to connect to real hardware instead.
-    // -------------------------------------------------------------------------
-    tracing::info!("Spawning simulator ({} PLC(s))", plc_ports.len());
-    SimulatorModule::spawn(Arc::clone(&handle)).await?;
-    tracing::info!("Simulator running — OPC-UA servers bound on ports {:?}", plc_ports);
-
-    // -------------------------------------------------------------------------
-    // Start connectors — derived from the plant config, not the simulator.
-    // Protocol field on each PLC selects the ConnectorImpl at compile time.
-    // -------------------------------------------------------------------------
-    let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(HashMap::new()));
+    let plcs      = handle.read().await.all_plcs().to_vec();
     let endpoints = handle.read().await.endpoint_configs();
     let tick_ms   = handle.read().await.default_tick_ms();
 
-    tracing::info!("Starting {} connector(s) at {}ms tick", endpoints.len(), tick_ms);
-    for endpoint in endpoints {
+    if plcs.iter().any(|p| p.simulated) {
+        SimulatorModule::start_physics(Arc::clone(&handle)).await?;
+    }
+
+    let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(HashMap::new()));
+
+    for (plc, endpoint) in plcs.into_iter().zip(endpoints) {
+        if plc.simulated {
+            release_ports(&[plc.port]);
+            SimulatorModule::start_server(Arc::clone(&handle), plc).await?;
+        }
+
         match endpoint.protocol.as_str() {
             "opcua" => {
-                tracing::info!("  [opcua] {} → {}", endpoint.name, endpoint.url);
+                tracing::info!("[opcua] {} → {}", endpoint.name, endpoint.url);
                 let (name, connector) = ScadaPlcConnector::new(endpoint);
                 GenericConnector::new(name, connector, tick_ms, Arc::clone(&ingested)).start();
             }
             other => {
-                tracing::warn!("Skipping PLC '{}': unknown protocol '{}'", endpoint.name, other);
+                tracing::warn!("Skipping '{}': unknown protocol '{}'", endpoint.name, other);
             }
         }
     }
@@ -102,7 +91,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::signal::ctrl_c().await?;
 
     tracing::info!("Ctrl-C received — shutting down");
-    release_ports(&plc_ports);
+    let sim_ports: Vec<u16> = handle.read().await
+        .all_plcs().iter()
+        .filter(|p| p.simulated)
+        .map(|p| p.port)
+        .collect();
+    if !sim_ports.is_empty() { release_ports(&sim_ports); }
     tracing::info!("=== Shutdown complete ===");
 
     Ok(())

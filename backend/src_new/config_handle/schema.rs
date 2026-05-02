@@ -53,13 +53,14 @@ pub struct PlantConfig {
 
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub struct PlcConfig {
-    pub plc_id:   String,
-    pub name:     String,
-    pub protocol: String,  // "opcua" | "modbus"
-    pub uri:      String,
-    pub port:     u16,
-    pub endpoint: String,
-    pub devices:  Vec<DeviceConfig>,
+    pub plc_id:    String,
+    pub name:      String,
+    pub simulated: bool,
+    pub protocol:  String,  // "opcua" | "modbus"
+    pub uri:       String,
+    pub port:      u16,
+    pub endpoint:  String,
+    pub devices:   Vec<DeviceConfig>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]

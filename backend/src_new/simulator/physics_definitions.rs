@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use rhai::{Dynamic, Engine, Scope, AST};
-use crate::models::{DataType, DeviceTypeDefinition};
+use crate::primitives::DataType;
+use crate::config_handle::DeviceTypeDefinition;
 
 /// Compiles all device physics scripts once at startup, then executes them per tick.
 ///

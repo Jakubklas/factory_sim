@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use crate::simulator::{PlantConfigHandle, PhysicsEngine};
-use crate::models::PhysicsMode;
+use crate::config_handle::PlantConfigHandle;
+use crate::simulator::PhysicsEngine;
+use crate::primitives::PhysicsMode;
 
 /// Pre-computed device execution order, built once at startup from the wiring graph.
 /// Devices are sorted topologically so upstream outputs are always ready before
@@ -100,7 +101,7 @@ pub fn tick(
 ) {
     for device_id in &plan.order {
         // --- 1. Propagate input port values from upstream state ---
-        let input_copies: Vec<(String, crate::models::DataType)> = {
+        let input_copies: Vec<(String, crate::primitives::DataType)> = {
             let device = match handle.get_resolved(device_id) {
                 Some(d) => d,
                 None    => continue,

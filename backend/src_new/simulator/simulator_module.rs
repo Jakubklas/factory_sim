@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use super::{PlantConfigHandle, PhysicsEngine, TickPlan, tick};
+use crate::config_handle::PlantConfigHandle;
+use super::{PhysicsEngine, TickPlan, tick};
 use super::server::plc_server;
 
 // ============================================================================

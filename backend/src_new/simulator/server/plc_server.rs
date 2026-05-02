@@ -1,10 +1,12 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use opcua::server::prelude::*;
 use opcua::server::config::{ServerConfig, TcpConfig};
 use opcua::server::server::Server;
 use crate::config_handle::PlantConfigHandle;
-use crate::models::{DataType, PlcConfig};
+use crate::primitives::DataType;
+use crate::config_handle::PlcConfig;
 
 // ============================================================================
 // Entry point — one OPC-UA server per PLC
@@ -78,21 +80,21 @@ async fn start_plc_server(
             .add_folder(&plc.name, &plc.name, &NodeId::objects_folder_id())
             .expect("Failed to create PLC folder");
 
-        let mut device_ids_seen: Vec<String> = Vec::new();
-        for spec in &node_specs {
-            if !device_ids_seen.contains(&spec.device_id) {
-                device_ids_seen.push(spec.device_id.clone());
-            }
-        }
+        let mut seen: HashSet<&str> = HashSet::new();
+        let device_ids_seen: Vec<&str> = node_specs
+            .iter()
+            .filter(|s| seen.insert(s.device_id.as_str()))
+            .map(|s| s.device_id.as_str())
+            .collect();
 
         for device_id in &device_ids_seen {
             let device_folder = as_
-                .add_folder(device_id, device_id, &plc_folder)
+                .add_folder(*device_id, *device_id, &plc_folder)
                 .expect("Failed to create device folder");
 
             let variables: Vec<Variable> = node_specs
                 .iter()
-                .filter(|s| &s.device_id == device_id)
+                .filter(|s| s.device_id.as_str() == *device_id)
                 .map(|s| {
                     let node_id = NodeId::new(2, s.node_path.clone());
                     match &s.initial_value {

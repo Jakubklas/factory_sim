@@ -2,7 +2,8 @@ use std::str::FromStr;
 use std::sync::Arc;
 use opcua::client::prelude::*;
 use opcua::sync::RwLock as OpcRwLock;
-use crate::models::{DataType, PlcEndpointConfig};
+use crate::primitives::DataType;
+use crate::config_handle::PlcEndpointConfig;
 use crate::comms::generic_connector::{ConnectorImpl, PartialState};
 
 // ============================================================================

@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::models::{DataType, DeviceConfig, DeviceTypeDefinition, PlantConfig, PlcConfig, PlcEndpointConfig, NodeReadConfig};
+use crate::primitives::DataType;
 use super::{DeviceTypeRegistry, PlantRegistry};
+use super::schema::{DeviceConfig, DeviceTypeDefinition, PlantConfig, PlcConfig, PlcEndpointConfig, NodeReadConfig};
 
 // Type aliases to keep signatures readable
 type DeviceId  = String;
@@ -12,24 +13,17 @@ type LiveState = HashMap<DeviceId, HashMap<FieldName, DataType>>;
 /// A fully-resolved device: instance config merged with its type definition.
 /// This is what the tick loop and plc_server work with — no further lookups needed.
 pub struct ResolvedDevice {
-    pub config: DeviceConfig,               // instance: id, wiring, params, tick_ms
-    pub type_def: DeviceTypeDefinition,     // type: physics, functions, metrics
-}
-
-impl ResolvedDevice {
-    pub fn effective_tick_ms(&self, default: u64) -> u64 {
-        self.config.tick_ms.unwrap_or(default)
-    }
+    pub config:   DeviceConfig,           // instance: id, wiring, params, tick_ms
+    pub type_def: DeviceTypeDefinition,   // type: physics, functions, metrics
 }
 
 /// Runtime handle for a loaded plant.
-/// Owns the static config tree, the type registry, resolved devices, and all live state.
+/// Owns the static config tree, resolved devices, and all live state.
 /// Wrap in Arc<RwLock<PlantConfigHandle>> and share across threads.
 pub struct PlantConfigHandle {
-    config:   PlantConfig,
-    registry: HashMap<String, DeviceTypeDefinition>,  // device_type → definition
-    devices:  Vec<ResolvedDevice>,                    // all devices, type already merged in
-    state:    LiveState,                              // live field values, mutated every tick
+    config:  PlantConfig,
+    devices: Vec<ResolvedDevice>,  // all devices, type already merged in
+    state:   LiveState,            // live field values, mutated every tick
 }
 
 impl PlantConfigHandle {
@@ -58,7 +52,6 @@ impl PlantConfigHandle {
 
         for plc in &config.plcs {
             for device_config in &plc.devices {
-                // look up the type definition
                 let type_def = registry
                     .get(&device_config.device_type)
                     .ok_or_else(|| format!(
@@ -66,20 +59,15 @@ impl PlantConfigHandle {
                         device_config.device_id, device_config.device_type
                     ))?;
 
-                // validate required params
                 for param in &type_def.required_params {
-                    if !device_config.params.contains_key(&param.name) {
-                        match param.default {
-                            Some(_) => {} // will use default, fine
-                            None    => return Err(format!(
-                                "Device '{}' (type '{}') is missing required param '{}'",
-                                device_config.device_id, device_config.device_type, param.name
-                            ).into()),
-                        }
+                    if !device_config.params.contains_key(&param.name) && param.default.is_none() {
+                        return Err(format!(
+                            "Device '{}' (type '{}') is missing required param '{}'",
+                            device_config.device_id, device_config.device_type, param.name
+                        ).into());
                     }
                 }
 
-                // seed live state from type's metrics
                 let mut fields: HashMap<FieldName, DataType> = HashMap::new();
                 for metric in &type_def.metrics {
                     let value = metric.initial_value.clone()
@@ -99,7 +87,7 @@ impl PlantConfigHandle {
             }
         }
 
-        Ok(Arc::new(RwLock::new(Self { config, registry, devices, state })))
+        Ok(Arc::new(RwLock::new(Self { config, devices, state })))
     }
 
     // -------------------------------------------------------------------------
@@ -146,32 +134,8 @@ impl PlantConfigHandle {
     }
 
     // -------------------------------------------------------------------------
-    // Config lookups — PLCs
+    // Config lookups
     // -------------------------------------------------------------------------
-
-    pub fn get_plc_by_id(&self, plc_id: &str) -> Option<&PlcConfig> {
-        self.config.plcs.iter().find(|p| p.plc_id == plc_id)
-    }
-
-    pub fn get_plc_by_name(&self, name: &str) -> Option<&PlcConfig> {
-        self.config.plcs.iter().find(|p| p.name == name)
-    }
-
-    // -------------------------------------------------------------------------
-    // Config lookups — type registry
-    // -------------------------------------------------------------------------
-
-    pub fn get_type_def(&self, device_type: &str) -> Option<&DeviceTypeDefinition> {
-        self.registry.get(device_type)
-    }
-
-    // -------------------------------------------------------------------------
-    // Convenience
-    // -------------------------------------------------------------------------
-
-    pub fn plant_name(&self) -> &str {
-        &self.config.name
-    }
 
     pub fn default_tick_ms(&self) -> u64 {
         self.config.default_tick_ms

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use crate::models::DataType;
+use crate::primitives::DataType;
 
 // Full shared state, written to by all connectors. Layout: device_id → field_name → value
 pub type IngestedState = HashMap<String, HashMap<String, DataType>>;

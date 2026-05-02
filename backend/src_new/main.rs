@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use tokio::sync::RwLock;
 use tracing_subscriber::EnvFilter;
 
-mod models;
+mod primitives;
 mod config_handle;
 mod simulator;
 mod comms;

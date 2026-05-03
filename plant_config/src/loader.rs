@@ -1,6 +1,6 @@
 use crate::schema::{PlantConfig, DeviceTypeDefinition};
 
-/// Load plant config from a JSON file (factory.json).
+/// Load plant config from a JSON file (plant.json).
 pub fn load_plant_config(path: &str) -> Result<PlantConfig, Box<dyn std::error::Error>> {
     let content = std::fs::read_to_string(path)?;
     Ok(serde_json::from_str(&content)?)

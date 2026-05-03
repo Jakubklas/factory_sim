@@ -4,11 +4,11 @@ use plant_config::{ResolvedPlant, loader as pc_loader};
 /// Fails fast if the env var is missing or the files can't be parsed.
 pub fn load() -> Result<ResolvedPlant, Box<dyn std::error::Error>> {
     let config_dir = std::env::var("PLANT_CONFIG")
-        .map_err(|_| "PLANT_CONFIG env var is not set (expected path to directory containing factory.json)")?;
+        .map_err(|_| "PLANT_CONFIG env var is not set (expected path to directory containing plant.json)")?;
     let config_dir = std::path::Path::new(&config_dir);
 
     let plant_config  = pc_loader::load_plant_config(
-        config_dir.join("factory.json").to_str().unwrap()
+        config_dir.join("plant.json").to_str().unwrap()
     )?;
     let device_types  = pc_loader::load_device_types(
         config_dir.join("device_types.json").to_str().unwrap()

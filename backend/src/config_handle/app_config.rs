@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 /// Application-level runtime config — ports, hosts, tick rate.
-/// Separate from plant topology (factory.json) and device physics (device_types.json).
+/// Separate from plant topology (plant.json) and device physics (device_types.json).
 #[derive(Deserialize, Debug)]
 pub struct AppConfig {
     pub ws_host: String,

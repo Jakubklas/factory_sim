@@ -1,22 +1,18 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use plant_config::ResolvedPlant;
 
-use crate::config_handle::PlantConfigHandle;
-use crate::comms::{GenericConnector, IngestedState, ScadaPlcConnector, release_ports};
-use crate::simulator::SimulatorModule;
+use crate::comms::{GenericConnector, IngestedState, ScadaPlcConnector};
 
-/// Boot the full plant: start the physics tick loop (once, if any PLCs are simulated),
-/// then for each PLC start its OPC-UA simulator server (if simulated) and its connector.
+/// Boot the plant connectors. For each PLC, start a connector that polls its OPC-UA endpoint.
+/// Simulated PLCs are served by the separate simulator process — the backend polls them the same way.
 /// Returns the shared IngestedState that all connectors write into.
 pub async fn start(
-    handle:  Arc<RwLock<PlantConfigHandle>>,
+    plant:   Arc<ResolvedPlant>,
     tick_ms: u64,
 ) -> Result<Arc<RwLock<IngestedState>>, Box<dyn std::error::Error>> {
-    let (plcs, endpoints, plant_name) = {
-        let h = handle.read().await;
-        (h.all_plcs().to_vec(), h.endpoint_configs(), h.plant_config().name.clone())
-    };
+    let plcs       = &plant.config.plcs;
+    let endpoints  = plant.endpoint_configs();
 
     let sim_count  = plcs.iter().filter(|p| p.simulated).count();
     let live_count = plcs.len() - sim_count;
@@ -24,12 +20,12 @@ pub async fn start(
 
     let mut msg = format!(
         "\n  Plant: \"{}\"  ·  {} PLC{}  ({} simulated, {} live)  ·  {} device{}\n",
-        plant_name,
+        plant.config.name,
         plcs.len(), if plcs.len() == 1 { "" } else { "s" },
         sim_count, live_count,
         dev_count, if dev_count == 1 { "" } else { "s" },
     );
-    for plc in &plcs {
+    for plc in plcs {
         let url = format!("{}:{}{}", plc.uri, plc.port, plc.endpoint);
         let tag = if plc.simulated { "[sim] " } else { "[live]" };
         let dev_ids: Vec<&str> = plc.devices.iter().map(|d| d.device_id.as_str()).collect();
@@ -39,18 +35,9 @@ pub async fn start(
     msg.push('\n');
     tracing::info!("{}", msg);
 
-    if plcs.iter().any(|p| p.simulated) {
-        SimulatorModule::start_physics(Arc::clone(&handle), tick_ms).await?;
-    }
+    let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(std::collections::HashMap::new()));
 
-    let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(HashMap::new()));
-
-    for (plc, endpoint) in plcs.into_iter().zip(endpoints) {
-        if plc.simulated {
-            release_ports(&[plc.port]);
-            SimulatorModule::start_server(Arc::clone(&handle), plc, tick_ms).await?;
-        }
-
+    for endpoint in endpoints {
         match endpoint.protocol.as_str() {
             "opcua" => {
                 let (name, connector) = ScadaPlcConnector::new(endpoint);

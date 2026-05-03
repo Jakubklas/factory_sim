@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
-use crate::primitives::DataType;
+use plant_config::DataType;
 
 // Full shared state, written to by all connectors. Layout: device_id → field_name → value
 pub type IngestedState = HashMap<String, HashMap<String, DataType>>;
@@ -67,7 +67,7 @@ impl<C: ConnectorImpl> GenericConnector<C> {
                 }
                 Err(e) => {
                     let delay = self.backoff_secs[attempt.min(self.backoff_secs.len() - 1)];
-                    tracing::warn!(
+                    tracing::debug!(
                         "Connector '{}' connect attempt {} failed — retrying in {}s: {}",
                         self.name, attempt + 1, delay, e
                     );

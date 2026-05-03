@@ -7,9 +7,7 @@ impl tracing_subscriber::fmt::time::FormatTime for SecondsTimer {
     }
 }
 
-mod primitives;
 mod config_handle;
-mod simulator;
 mod comms;
 mod plant;
 mod api;
@@ -29,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer().with_timer(SecondsTimer))
         .init();
 
-    let (app, handle) = load_all()?;
+    let (app, plant) = load_all()?;
 
     let addr = format!("{}:{}", app.ws_host, app.ws_port);
     tracing::info!(
@@ -39,16 +37,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
          http://{}/api/plant\n    \
          http://{}/api/log-level?set=info\n    \
          http://{}/api/log-level?set=debug\n    \
-         http://{}/api/log-level?set=water_plant_twin::comms=trace\n",
+         http://{}/api/log-level?set=backend::comms=trace\n",
         addr, addr, addr, addr, addr, addr
     );
 
-    let ingested    = plant::start(handle.clone(), app.tick_ms).await?;
+    let ingested    = plant::start(plant.clone(), app.tick_ms).await?;
     let ingested_ws = ingested.clone();
-    let handle_ws   = handle.clone();
     let ws_host     = app.ws_host.clone();
     tokio::spawn(async move {
-        if let Err(e) = api::ws_bridge::start(ingested_ws, handle_ws, app.tick_ms, &ws_host, app.ws_port, log_handle).await {
+        if let Err(e) = api::ws_bridge::start(ingested_ws, plant, app.tick_ms, &ws_host, app.ws_port, log_handle).await {
             tracing::error!("WS bridge error: {}", e);
         }
     });
@@ -56,16 +53,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("\n  ══ Running — press Ctrl-C to stop ══\n");
     tokio::signal::ctrl_c().await?;
 
-    tracing::info!("\n  Ctrl-C received — shutting down");
-    let sim_ports: Vec<u16> = handle.read().await
-        .all_plcs().iter()
-        .filter(|p| p.simulated)
-        .map(|p| p.port)
-        .collect();
-    if !sim_ports.is_empty() {
-        comms::release_ports(&sim_ports);
-    }
-    tracing::info!("  Shutdown complete\n");
-
+    tracing::info!("\n  Ctrl-C received — shutting down\n");
     Ok(())
 }

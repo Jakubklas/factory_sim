@@ -12,26 +12,23 @@ use axum::{
 };
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{EnvFilter, reload};
+use plant_config::{ResolvedPlant, PlantConfig};
 
 use crate::comms::{IngestedState, release_ports};
-use crate::config_handle::PlantConfigHandle;
-use crate::config_handle::schema::PlantConfig;
 
 type LogHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
 
 #[derive(Clone)]
 struct AppState {
     ingested:   Arc<RwLock<IngestedState>>,
-    handle:     Arc<RwLock<PlantConfigHandle>>,
+    plant:      Arc<ResolvedPlant>,
     tick_ms:    u64,
     log_handle: LogHandle,
 }
 
-/// Start the axum server and block until it exits.
-/// Spawn this in a tokio task from main so it runs alongside the plant.
 pub async fn start(
     ingested:   Arc<RwLock<IngestedState>>,
-    handle:     Arc<RwLock<PlantConfigHandle>>,
+    plant:      Arc<ResolvedPlant>,
     tick_ms:    u64,
     host:       &str,
     port:       u16,
@@ -39,16 +36,16 @@ pub async fn start(
 ) -> Result<(), Box<dyn std::error::Error>> {
     release_ports(&[port]);
 
-    let state = AppState { ingested, handle, tick_ms, log_handle };
+    let state = AppState { ingested, plant, tick_ms, log_handle };
 
     let app = Router::new()
-        .route("/ws", get(ws_handler))
-        .route("/api/plant", get(plant_handler))
+        .route("/ws",            get(ws_handler))
+        .route("/api/plant",     get(plant_handler))
         .route("/api/log-level", get(log_level_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
-    let addr = format!("{}:{}", host, port);
+    let addr     = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     axum::serve(listener, app).await?;
@@ -71,8 +68,7 @@ async fn ws_handler(
 async fn plant_handler(
     State(state): State<AppState>,
 ) -> Json<PlantConfig> {
-    let config = state.handle.read().await.plant_config().clone();
-    Json(config)
+    Json(state.plant.config.clone())
 }
 
 async fn log_level_handler(
@@ -84,7 +80,7 @@ async fn log_level_handler(
             "Usage: GET /api/log-level?set=<RUST_LOG filter>",
             "Examples:",
             "  ?set=debug",
-            "  ?set=water_plant_twin::comms=trace",
+            "  ?set=backend::comms=trace",
             "  ?set=info                            (reset to default)",
         ].join("\n"));
     };
@@ -101,8 +97,6 @@ async fn log_level_handler(
     }
 }
 
-/// Push the full IngestedState snapshot to the client on every tick.
-/// Breaks cleanly on send error (client disconnected).
 async fn stream_state(mut socket: WebSocket, ingested: Arc<RwLock<IngestedState>>, tick_ms: u64) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(tick_ms));
     loop {

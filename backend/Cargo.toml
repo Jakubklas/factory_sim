@@ -1,13 +1,14 @@
 [package]
-name = "water-plant-twin"
+name = "backend"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "water-plant-twin"
+name = "backend"
 path = "src/main.rs"
 
 [dependencies]
+plant_config = { path = "../plant_config" }
 # OPC-UA server and client
 opcua = { version = "0.12", features = ["server", "client"] }
 

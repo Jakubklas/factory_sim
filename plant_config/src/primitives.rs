@@ -1,9 +1,5 @@
 use serde::{Deserialize, Serialize, Deserializer};
 
-// ============================================================================
-// DataType — field type AND value in one enum
-// ============================================================================
-
 /// A field's data type AND its value in one enum.
 /// Used both as a schema declaration (what type a metric is)
 /// and as a value container (the actual current/initial value).
@@ -14,7 +10,7 @@ use serde::{Deserialize, Serialize, Deserializer};
 #[derive(Clone, Debug)]
 pub enum DataType {
     Float(f64),
-    Str(String),    // named Str to avoid clashing with std::String
+    Str(String),
     Boolean(bool),
 }
 
@@ -57,29 +53,15 @@ impl Serialize for DataType {
     }
 }
 
-// ============================================================================
-// PhysicsMode
-// ============================================================================
-
 /// Whether this device type runs a physics simulation or reads from a real PLC.
-/// When Live, the physics_definition script is ignored.
 #[derive(Deserialize, Serialize, Clone, Copy, Debug)]
 pub enum PhysicsMode {
-    Simulation,  // run physics_definition script each tick
-    Live,        // skip physics; tick loop reads raw OPC-UA values instead
+    Simulation,
+    Live,
 }
 
-// ============================================================================
-// FunctionKind — externally tagged for clean serde
-// ============================================================================
-
 /// Describes a control function a device exposes (e.g. "open", "set_position").
-/// Config-only — the actual execution logic lives in simulator/.
-///
-/// JSON format (externally tagged):
-///   "kind": { "SetField":       { "field": "position", "value": 1.0 } }
-///   "kind": { "SetFieldFromArg": { "field": "target_temperature", "arg_index": 0 } }
-///   "kind": { "IncrementField": { "field": "counter", "amount": 1.0 } }
+/// Config-only — execution logic lives in the simulator.
 #[derive(Deserialize, Serialize, Clone, Debug)]
 pub enum FunctionKind {
     SetField        { field: String, value: DataType },

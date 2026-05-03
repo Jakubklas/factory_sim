@@ -1,0 +1,3 @@
+[workspace]
+members = ["plant_config", "backend", "simulator"]
+resolver = "2"

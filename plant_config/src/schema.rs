@@ -54,8 +54,11 @@ pub struct PlantConfig {
 pub struct PlcConfig {
     pub plc_id:    String,
     pub name:      String,
+    /// True when this PLC is served by the simulator process.
+    /// On the backend side this is informational only — the backend polls every
+    /// PLC via OPC-UA regardless of who is hosting it.
     pub simulated: bool,
-    pub protocol:  String,  // "opcua" | "modbus"
+    pub protocol:  String,
     pub uri:       String,
     pub port:      u16,
     pub endpoint:  String,
@@ -80,13 +83,13 @@ pub struct InputVariable {
 }
 
 // ============================================================================
-// Connector contract — produced by PlantConfigHandle::endpoint_configs(),
+// Connector contract — produced by ResolvedPlant::endpoint_configs(),
 // consumed by the comms layer. Defines what each connector needs to poll.
 // ============================================================================
 
 pub struct PlcEndpointConfig {
     pub name:       String,
-    pub protocol:   String,  // "opcua" | "modbus"
+    pub protocol:   String,
     pub url:        String,
     pub node_reads: Vec<NodeReadConfig>,
 }

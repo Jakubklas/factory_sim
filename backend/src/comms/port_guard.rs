@@ -18,7 +18,7 @@ pub fn release_ports(ports: &[u16]) {
                 let stdout = String::from_utf8_lossy(&out.stdout);
                 for pid_str in stdout.split_whitespace() {
                     if let Ok(pid) = pid_str.trim().parse::<u32>() {
-                        // Never kill ourselves
+                        // Never kill our own running ports
                         if pid == std::process::id() { continue; }
                         let killed = std::process::Command::new("kill")
                             .args(["-9", &pid.to_string()])

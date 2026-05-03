@@ -4,9 +4,8 @@ use plant_config::ResolvedPlant;
 
 use crate::comms::{GenericConnector, IngestedState, ScadaPlcConnector};
 
-/// Boot the plant connectors. For each PLC, start a connector that polls its OPC-UA endpoint.
-/// Simulated PLCs are served by the separate simulator process — the backend polls them the same way.
-/// Returns the shared IngestedState that all connectors write into.
+/// Start one connector per PLC and return the shared ingested-state map.
+/// Simulated PLCs are served by the simulator process — polled over OPC-UA identically to real ones.
 pub async fn start(
     plant:   Arc<ResolvedPlant>,
     tick_ms: u64,
@@ -43,9 +42,7 @@ pub async fn start(
                 let (name, connector) = ScadaPlcConnector::new(endpoint);
                 GenericConnector::new(name, connector, tick_ms, Arc::clone(&ingested)).start();
             }
-            other => {
-                tracing::warn!("Skipping '{}': unknown protocol '{}'", endpoint.name, other);
-            }
+            other => tracing::warn!("Skipping '{}': unknown protocol '{}'", endpoint.name, other),
         }
     }
 

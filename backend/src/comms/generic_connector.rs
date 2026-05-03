@@ -4,37 +4,20 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use plant_config::DataType;
 
-// Full shared state, written to by all connectors. Layout: device_id → field_name → value
+/// Full shared state written by all connectors: device_id → field_name → value.
 pub type IngestedState = HashMap<String, HashMap<String, DataType>>;
-// One connector's poll result — upserted into IngestedState each tick, leaving other devices untouched.
+/// One connector's poll result — upserted into IngestedState each tick, leaving other devices untouched.
 pub type PartialState  = HashMap<String, HashMap<String, DataType>>;
 
-// ============================================================================
-// ConnectorImpl — implement this to add a new protocol
-// ============================================================================
-
-/// Protocol behaviour only — connect and poll.
-/// Identity (name) lives on GenericConnector, not here.
+/// Implement this to add a new protocol. connect() makes a single attempt; GenericConnector handles retry.
 pub trait ConnectorImpl: Send + 'static {
-    /// The live connection handle (e.g. a session, a client, a pool).
-    /// Must be `Send` so the runner thread can own it.
     type Conn: Send + 'static;
-
-    /// Open a fresh connection. Called once at startup and on reconnect.
-    /// Backoff and retry are handled by GenericConnector — make a single attempt here.
     fn connect(&self) -> Result<Self::Conn, Box<dyn std::error::Error + Send + Sync>>;
-
-    /// Read all values for this endpoint and return them as a partial state.
-    /// Return `Err` if the connection is broken (triggers reconnect).
-    /// Partial failures within a poll should be handled internally.
+    /// Return Err if the connection is broken — triggers reconnect in GenericConnector.
     fn poll(&self, conn: &Self::Conn) -> Result<PartialState, Box<dyn std::error::Error + Send + Sync>>;
 }
 
-// ============================================================================
-// GenericConnector — one OS thread per connector
-// ============================================================================
-
-// C is the concrete connector type (e.g. ScadaPlcConnector) — resolved at compile time.
+/// One OS thread per connector. Runs connect → poll loop with exponential backoff on failure.
 pub struct GenericConnector<C: ConnectorImpl> {
     name:         String,
     impl_:        C,
@@ -53,6 +36,7 @@ impl<C: ConnectorImpl> GenericConnector<C> {
         std::thread::spawn(move || self.run());
     }
 
+    /// Retries connect() with exponential backoff until it succeeds. Logs at DEBUG until first success.
     fn connect_with_backoff(&self) -> C::Conn {
         let mut attempt: usize = 0;
         loop {
@@ -91,6 +75,7 @@ impl<C: ConnectorImpl> GenericConnector<C> {
                 Ok(partial) => {
                     consecutive_failures = 0;
 
+                    // Log a full state snapshot every 30s at INFO level.
                     if last_summary.elapsed() >= summary_every {
                         last_summary = Instant::now();
                         let mut msg = format!(

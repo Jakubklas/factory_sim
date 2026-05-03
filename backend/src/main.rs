@@ -1,5 +1,6 @@
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt, reload};
 
+/// Formats log timestamps as seconds-resolution ISO-8601 (e.g. 2026-05-03T17:00:00Z).
 struct SecondsTimer;
 impl tracing_subscriber::fmt::time::FormatTime for SecondsTimer {
     fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
@@ -16,6 +17,7 @@ use config_handle::load_all;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Default to info; suppress noisy opcua internals to warn. Reloadable at runtime via /api/log-level.
     let filter = EnvFilter::from_default_env()
         .add_directive("info".parse()?)
         .add_directive("opcua=warn".parse()?);
@@ -27,6 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer().with_timer(SecondsTimer))
         .init();
 
+    // Load app.json (ports, tick rate) + plant.json/device_types.json (resolved plant topology).
     let (app, plant) = load_all()?;
 
     let addr = format!("{}:{}", app.ws_host, app.ws_port);
@@ -41,9 +44,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         addr, addr, addr, addr, addr, addr
     );
 
+    // Start one OPC-UA connector per PLC; returns the shared ingested-state map.
     let ingested    = plant::start(plant.clone(), app.tick_ms).await?;
     let ingested_ws = ingested.clone();
     let ws_host     = app.ws_host.clone();
+
+    // WS bridge runs alongside the connectors — serves /ws, /api/plant, /api/log-level.
     tokio::spawn(async move {
         if let Err(e) = api::ws_bridge::start(ingested_ws, plant, app.tick_ms, &ws_host, app.ws_port, log_handle).await {
             tracing::error!("WS bridge error: {}", e);

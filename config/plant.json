@@ -34,18 +34,7 @@
             "target_pressure": 3.0,
             "kp": 0.05
           }
-        }
-      ]
-    },
-    {
-      "plc_id": "plc_002",
-      "name": "Flow PLC",
-      "simulated": true,
-      "protocol": "opcua",
-      "uri": "opc.tcp://localhost",
-      "port": 4841,
-      "endpoint": "/",
-      "devices": [
+        },
         {
           "device_id": "flow_meter_001",
           "name": "Main Flow Meter",
@@ -58,7 +47,18 @@
             "coefficient": 10.0,
             "accumulate_volume": 1.0
           }
-        },
+        }
+      ]
+    },
+    {
+      "plc_id": "plc_002",
+      "name": "Bypass PLC",
+      "simulated": true,
+      "protocol": "opcua",
+      "uri": "opc.tcp://localhost",
+      "port": 4841,
+      "endpoint": "/",
+      "devices": [
         {
           "device_id": "flow_meter_002",
           "name": "Bypass Flow Meter",

@@ -36,27 +36,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let tick_ms = loader::tick_ms();
     let plant   = loader::load()?;
 
-    // Only serve PLCs marked as simulated
-    let sim_plcs: Vec<_> = plant.config.plcs.iter()
-        .filter(|p| p.simulated)
-        .cloned()
-        .collect();
-
-    if sim_plcs.is_empty() {
-        tracing::warn!("No simulated PLCs found in config — nothing to do");
-        return Ok(());
-    }
+    // After slicing, exactly one PLC remains — the one this process owns.
+    let plc = plant.config.plcs[0].clone();
 
     tracing::info!(
         "\n\n  ══════════════════════════════════\n  simulator  starting\n  ══════════════════════════════════\n\n  \
-         tick: {}ms  ·  {} simulated PLC{}\n",
-        tick_ms,
-        sim_plcs.len(),
-        if sim_plcs.len() == 1 { "" } else { "s" },
+         PLC: {} ({})  ·  tick: {}ms  ·  {} device(s)\n",
+        plc.plc_id, plc.name, tick_ms, plant.devices.len(),
     );
 
-    // Release ports before binding
-    let sim_ports: Vec<u16> = sim_plcs.iter().map(|p| p.port).collect();
+    // Release this PLC's port before binding
+    let sim_ports = vec![plc.port];
     port_guard::release_ports(&sim_ports);
 
     // Build physics engine from all device types
@@ -97,15 +87,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Start one OPC-UA server per simulated PLC
-    for plc in sim_plcs {
-        server::plc_server::start_one(
-            Arc::clone(&state),
-            Arc::clone(&devices),
-            plc,
-            tick_ms,
-        ).await?;
-    }
+    // Start the OPC-UA server for this process's PLC
+    server::plc_server::start_one(
+        Arc::clone(&state),
+        Arc::clone(&devices),
+        plc,
+        tick_ms,
+    ).await?;
 
     tracing::info!("\n  ══ Running — press Ctrl-C to stop ══\n");
     tokio::signal::ctrl_c().await?;

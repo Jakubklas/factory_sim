@@ -1,0 +1,225 @@
+# Architecture
+
+Industrial-twin platform. A simulator emits OPC-UA telemetry indistinguishable from real PLCs; a backend polls it; a frontend renders it. Three processes, three deployable units, two network boundaries.
+
+---
+
+## Top-level
+
+```
+                       ┌──────────────────────┐
+                       │   config/   shared   │
+                       │   plant.json         │
+                       │   device_types.json  │
+                       │   BE_HOST/PORT/TICK  │
+                       └──────────┬───────────┘
+                                  │ read at startup
+              ┌───────────────────┴───────────────────┐
+              │                                       │
+        ┌─────▼─────┐    OPC-UA      ┌────────────┐   │
+        │ simulator │═════════╗      │  backend   │   │
+        │  plc_001  │  :4840  ╠═════>│            │   │
+        │ (1 PLC)   │         ║      │ connectors │   │
+        └───────────┘         ║      │ + WS API   │   │
+        ┌───────────┐         ║      │            │   │
+        │ simulator │═════════╝      └─────┬──────┘   │
+        │  plc_002  │  :4841                │ WS+HTTP │
+        │ (1 PLC)   │                       │  :3001  │
+        └───────────┘                       ▼         │
+                                     ┌──────────┐     │
+                                     │ frontend │◄────┘
+                                     │ three.js │ (REST /api/plant)
+                                     └──────────┘
+```
+
+**Why this shape.** OPC-UA is the boundary between "thing being measured" and "thing measuring it" — the same boundary a real PLC sits on. Each simulator process owns exactly one PLC, so cross-PLC physics wiring can't smuggle past the OPC-UA hop. Simulator and real plant are swappable; the backend never knows which one it's talking to.
+
+---
+
+## The three crates
+
+```
+┌─ plant_config ────────────────────────────────────┐
+│  Shared schema library. No tokio, no Arc, no      │
+│  state — just types and parsers.                  │
+│                                                   │
+│  primitives.rs   DataType, PhysicsMode, Function  │
+│  schema.rs       PlantConfig, PlcConfig, Device…  │
+│  resolved.rs     ResolvedPlant (merged + valid)   │
+│  loader.rs       JSON → typed structs             │
+│                                                   │
+│  exists because: BE & simulator must agree on     │
+│  what a plant looks like, without sharing state.  │
+└───────────────────────────────────────────────────┘
+        ▲                          ▲
+        │                          │
+        │ depends on               │ depends on
+        │                          │
+┌─ backend ──────────────┐  ┌─ simulator ──────────────┐
+│  API + connectors.     │  │  Physics + OPC-UA hosts. │
+│                        │  │                          │
+│  comms/                │  │  state.rs    Simulator-  │
+│   ScadaPlcConnector    │  │              State (priv)│
+│   GenericConnector     │  │  tick.rs     topo-sorted │
+│                        │  │              tick loop   │
+│  api/ws_bridge.rs      │  │  physics_…   rhai engine │
+│   /ws  /api/plant      │  │  server/     OPC-UA srv  │
+│   /api/log-level       │  │              per PLC     │
+│                        │  │                          │
+│  plant.rs              │  │  loader.rs   PLANT_CONFIG│
+│   spawn connector/PLC  │  │              + SIM_PLC_ID│
+│                        │  │                          │
+│  deployable alone?     │  │  deployable alone?       │
+│  YES — polls any       │  │  YES — exposes OPC-UA,   │
+│  reachable OPC-UA      │  │  needs nothing else      │
+└────────────────────────┘  └──────────────────────────┘
+```
+
+---
+
+## Config flow
+
+`plant_config` is shared **schema**, not shared **state**. Both binaries read the JSON, build their own `Arc<ResolvedPlant>`, and never share it across the process boundary.
+
+```
+  plant.json                     device_types.json
+  (topology: PLCs + devices)     (physics + metrics)
+        │                                │
+        └──────────────┬─────────────────┘
+                       │
+              ResolvedPlant::build()
+              (cross-reference + validate)
+                       │
+                       ▼
+            ┌──────────────────────────┐
+            │ ResolvedPlant            │
+            │  .config                 │
+            │  .devices: Vec<          │
+            │     ResolvedDevice {     │
+            │       config,            │
+            │       type_def           │
+            │     }                    │
+            │  .endpoint_configs() →   │
+            │     Vec<PlcEndpointCfg>  │
+            └────────┬────────┬────────┘
+                     │        │
+              ┌──────┘        └──────┐
+              ▼                      ▼
+       Arc<ResolvedPlant>     Arc<ResolvedPlant>
+       (in simulator)          (in backend)
+       seeds SimulatorState    builds connectors
+```
+
+---
+
+## Runtime data flow
+
+The path of a single metric value from physics tick to browser:
+
+```
+┌─────────── simulator process ──────────────────┐
+│                                                │
+│  ┌──────────┐  write  ┌──────────────┐         │
+│  │ physics  ├────────>│ SimulatorState│        │
+│  │ (rhai)   │<────────┤   (private)  │         │
+│  └──────────┘  read   └───────┬──────┘         │
+│               inputs          │ snapshot       │
+│                               ▼                │
+│                        ┌──────────────┐        │
+│                        │ OPC-UA addr  │        │
+│                        │  space       │        │
+│                        └───────┬──────┘        │
+└────────────────────────────────┼───────────────┘
+                                 │
+                  · · · · · ·  TCP  · · · · · · · · ·
+                                 │
+┌────────────────────────────────┼───────────────┐
+│ backend process                ▼               │
+│                          ┌──────────────┐      │
+│                          │  Scada       │      │
+│                          │  Connector   │      │
+│                          │   .poll()    │      │
+│                          └───────┬──────┘      │
+│                                  │ upsert      │
+│                                  ▼             │
+│                          ┌──────────────┐      │
+│                          │ IngestedState│      │
+│                          └───────┬──────┘      │
+│                                  │ snapshot    │
+│                                  ▼             │
+│                          ┌──────────────┐      │
+│                          │  WS bridge   │      │
+│                          │  /ws  send   │      │
+│                          └───────┬──────┘      │
+└──────────────────────────────────┼─────────────┘
+                                   │ JSON
+                                   ▼
+                                frontend
+```
+
+**Why two state stores** (SimulatorState + IngestedState) instead of one. Each lives on one side of the OPC-UA boundary. Simulator's is private and authoritative for simulated plants. Backend's is sourced from polling — identical to what it would see from a real PLC. Collapsing them would break the fidelity guarantee.
+
+---
+
+## Threading model
+
+Each binary mixes tokio (async event loops) with std threads (blocking work).
+
+| Process              | tokio tasks                       | std threads                |
+|----------------------|-----------------------------------|----------------------------|
+| simulator (per PLC)  | physics tick · OPC-UA AS updater  | one OPC-UA server          |
+| backend              | WS bridge · axum HTTP             | one connector per PLC      |
+
+State-sharing primitives:
+
+```
+  Arc<ResolvedPlant>              read-only, no lock anywhere
+  Arc<RwLock<SimulatorState>>     physics writes, AS updater reads
+  Arc<RwLock<IngestedState>>      connectors write, WS bridge reads
+```
+
+---
+
+## Deployment
+
+Each binary is a leaf process with one config-volume input and one network port output. No shared filesystem or runtime state. One simulator container per simulated PLC; the topology (which PLCs exist) lives entirely in `plant.json`, so orchestration is `N + 1` containers derived mechanically from config.
+
+```
+┌─ container: simulator ──────┐   ┌─ container: backend ──────┐
+│  (one per simulated PLC)    │   │                           │
+│                             │   │  /config  ◄─── volume     │
+│  /config  ◄─── volume       │   │                           │
+│                             │   │  env: PLANT_CONFIG=/config│
+│  env: PLANT_CONFIG=/config  │   │       BE_PORT=3001 …      │
+│       SIM_PLC_ID=plc_xxx    │   │                           │
+│       SIM_TICK_MS=100       │   │  expose: 3001             │
+│                             │   │  (HTTP + WS)              │
+│  expose: <plc.port>         │   │                           │
+│  (OPC-UA, single port)      │   │                           │
+└─────────────────────────────┘   └───────────────────────────┘
+```
+
+In dev: `just sim-all` + `just be`. In prod: `N + 1` containers (one simulator per `simulated: true` PLC in `plant.json`, plus the backend), `config/` volume-mounted into each.
+
+---
+
+## Backend API surface
+
+| Endpoint                | Method | Returns                                  |
+|-------------------------|--------|------------------------------------------|
+| `/ws`                   | WS     | full `IngestedState` every tick (JSON)   |
+| `/api/plant`            | GET    | `PlantConfig` — static topology         |
+| `/api/log-level?set=…`  | GET    | reload tracing filter at runtime         |
+
+---
+
+## Evaluation
+
+Things worth fixing:
+
+1. **Connectors use `std::thread`, not tokio tasks.** Historical: `opcua-rs 0.12` has a sync client API. One OS thread per PLC is fine at this scale; reconsider when scaling to dozens of PLCs or when an async opcua client crate is viable.
+
+Things that are fine and worth not re-debating:
+
+- Full `IngestedState` cloned per WS frame — small, JSON-serialisable, no measurable cost.
+- `RwLock` instead of `watch`/channels for state — straightforward, no contention at tick-ms cadence.

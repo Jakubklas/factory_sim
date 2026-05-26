@@ -19,20 +19,23 @@ pub async fn start_one(
 
     let mut server_config = ServerConfig::default();
     server_config.application_name       = plc.name.clone();
-    server_config.application_uri        = plc.uri.clone();
+    server_config.application_uri        = format!("urn:factory-sim:{}", plc.plc_id);
     server_config.product_uri            = format!("urn:factory-sim:{}", plc.plc_id);
     server_config.create_sample_keypair  = true;
-    server_config.pki_dir                = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join(format!("pki/servers/{}", plc.name.to_lowercase().replace(' ', "-")))))
-        .unwrap_or_else(|| format!("pki/servers/{}", plc.name.to_lowercase().replace(' ', "-")).into());
+    server_config.pki_dir                = pki_dir_for_server(&plc.name);
     server_config.discovery_server_url   = None;
+    // Bind to 0.0.0.0 so other containers/hosts on the network can reach us.
     server_config.tcp_config = TcpConfig {
         hello_timeout: 10,
-        host:          "localhost".to_string(),
+        host:          "0.0.0.0".to_string(),
         port:          plc.port,
     };
-    server_config.discovery_urls = vec![format!("opc.tcp://localhost:{}", plc.port)];
+    // Advertise via the hostname clients should connect on. Resolution order:
+    // OPCUA_HOST (explicit) → HOSTNAME (Docker sets this to the service/container name) → localhost.
+    let advertise_host = std::env::var("OPCUA_HOST")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "localhost".to_string());
+    server_config.discovery_urls = vec![format!("opc.tcp://{}:{}", advertise_host, plc.port)];
     server_config.endpoints.insert(
         "none".to_string(),
         ServerEndpoint::new_none("/", &[ANONYMOUS_USER_TOKEN_ID.to_string()]),
@@ -139,6 +142,15 @@ fn collect_node_specs(devices: &[ResolvedDevice], plc: &PlcConfig) -> Vec<NodeSp
             })
         })
         .collect()
+}
+
+/// PKI directory for the OPC-UA server's auto-generated keypair.
+/// Read from `PKI_DIR` (defaults to `./pki`) and namespaced per PLC so multiple simulators
+/// on the same host don't clobber each other's certs.
+fn pki_dir_for_server(plc_name: &str) -> std::path::PathBuf {
+    let base = std::env::var("PKI_DIR").unwrap_or_else(|_| "./pki".to_string());
+    let safe = plc_name.to_lowercase().replace(' ', "-");
+    std::path::PathBuf::from(base).join("servers").join(safe)
 }
 
 fn datatype_to_variant(value: &DataType) -> Variant {

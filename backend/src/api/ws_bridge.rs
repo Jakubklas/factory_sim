@@ -14,7 +14,7 @@ use tower_http::cors::CorsLayer;
 use tracing_subscriber::{EnvFilter, reload};
 use plant_config::{ResolvedPlant, PlantConfig};
 
-use crate::comms::{IngestedState, release_ports};
+use crate::comms::IngestedState;
 
 type LogHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
 
@@ -34,14 +34,13 @@ pub async fn start(
     port:       u16,
     log_handle: LogHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    release_ports(&[port]);
-
     let state = AppState { ingested, plant, tick_ms, log_handle };
 
     let app = Router::new()
         .route("/ws",            get(ws_handler))
         .route("/api/plant",     get(plant_handler))
         .route("/api/log-level", get(log_level_handler))
+        .route("/health",        get(health_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -95,6 +94,10 @@ async fn log_level_handler(
             (StatusCode::BAD_REQUEST, format!("invalid filter '{}': {}", filter_str, e))
         }
     }
+}
+
+async fn health_handler() -> impl IntoResponse {
+    (StatusCode::OK, [("content-type", "application/json")], r#"{"status":"ok"}"#)
 }
 
 async fn stream_state(mut socket: WebSocket, ingested: Arc<RwLock<IngestedState>>, tick_ms: u64) {

@@ -110,10 +110,9 @@ impl ConnectorImpl for ScadaPlcConnector {
 fn connect_to_plc(
     endpoint: &str,
 ) -> Result<(Client, Arc<OpcRwLock<Session>>), Box<dyn std::error::Error + Send + Sync>> {
-    let pki_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.join("pki/clients/scada")))
-        .unwrap_or_else(|| "pki/clients/scada".into());
+    // PKI_DIR overrides the cert location; default `./pki` works for `cargo run` from repo root.
+    let base = std::env::var("PKI_DIR").unwrap_or_else(|_| "./pki".to_string());
+    let pki_dir = std::path::PathBuf::from(base).join("clients").join("scada");
 
     let mut client = ClientBuilder::new()
         .application_name("factory-sim-scada")

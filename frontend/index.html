@@ -24,6 +24,8 @@
   </head>
   <body>
     <div id="app"></div>
+    <!-- Runtime config injected by nginx container's entrypoint. Optional in dev. -->
+    <script src="/env.js"></script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -1,0 +1,11 @@
+[package]
+name = "tools"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "gen_compose"
+path = "src/bin/gen_compose.rs"
+
+[dependencies]
+plant_config = { path = "../plant_config" }

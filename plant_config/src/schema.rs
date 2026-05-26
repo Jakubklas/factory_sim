@@ -59,10 +59,21 @@ pub struct PlcConfig {
     /// PLC via OPC-UA regardless of who is hosting it.
     pub simulated: bool,
     pub protocol:  String,
-    pub uri:       String,
+    /// Optional override; when absent, defaults to `opc.tcp://{plc_id}`.
+    /// The default works under Docker/k8s service-name DNS. Set explicitly to
+    /// `opc.tcp://localhost` (or an IP) for local non-container dev or remote PLCs.
+    #[serde(default)]
+    pub uri:       Option<String>,
     pub port:      u16,
     pub endpoint:  String,
     pub devices:   Vec<DeviceConfig>,
+}
+
+impl PlcConfig {
+    /// Resolve the OPC-UA hostname for this PLC — explicit `uri` or `opc.tcp://{plc_id}`.
+    pub fn endpoint_uri(&self) -> String {
+        self.uri.clone().unwrap_or_else(|| format!("opc.tcp://{}", self.plc_id))
+    }
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug)]

@@ -1,3 +1,3 @@
 [workspace]
-members = ["plant_config", "backend", "simulator"]
+members = ["plant_config", "backend", "simulator", "tools"]
 resolver = "2"

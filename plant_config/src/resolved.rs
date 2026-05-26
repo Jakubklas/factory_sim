@@ -108,7 +108,7 @@ impl ResolvedPlant {
     /// Node ID format must match what plc_server registers in its address space.
     pub fn endpoint_configs(&self) -> Vec<PlcEndpointConfig> {
         self.config.plcs.iter().map(|plc| {
-            let url = format!("{}:{}{}", plc.uri, plc.port, plc.endpoint);
+            let url = format!("{}:{}{}", plc.endpoint_uri(), plc.port, plc.endpoint);
             let plc_device_ids: Vec<&str> = plc.devices.iter()
                 .map(|d| d.device_id.as_str())
                 .collect();

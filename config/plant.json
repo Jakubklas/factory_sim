@@ -8,7 +8,6 @@
       "name": "Heating PLC",
       "simulated": true,
       "protocol": "opcua",
-      "uri": "opc.tcp://localhost",
       "port": 4840,
       "endpoint": "/",
       "devices": [
@@ -55,7 +54,6 @@
       "name": "Bypass PLC",
       "simulated": true,
       "protocol": "opcua",
-      "uri": "opc.tcp://localhost",
       "port": 4841,
       "endpoint": "/",
       "devices": [

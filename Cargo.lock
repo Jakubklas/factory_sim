@@ -129,8 +129,6 @@ dependencies = [
  "chrono",
  "opcua",
  "plant_config",
- "rand",
- "rhai",
  "serde",
  "serde_json",
  "tokio",
@@ -1387,6 +1385,13 @@ dependencies = [
  "futures-sink",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "tools"
+version = "0.1.0"
+dependencies = [
+ "plant_config",
 ]
 
 [[package]]

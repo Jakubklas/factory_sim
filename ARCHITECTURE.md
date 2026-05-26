@@ -188,18 +188,38 @@ Each binary is a leaf process with one config-volume input and one network port 
 ┌─ container: simulator ──────┐   ┌─ container: backend ──────┐
 │  (one per simulated PLC)    │   │                           │
 │                             │   │  /config  ◄─── volume     │
-│  /config  ◄─── volume       │   │                           │
+│  /config  ◄─── volume       │   │  /data    ◄─── volume(rw) │
+│  /data    ◄─── volume(rw)   │   │                           │
 │                             │   │  env: PLANT_CONFIG=/config│
-│  env: PLANT_CONFIG=/config  │   │       BE_PORT=3001 …      │
-│       SIM_PLC_ID=plc_xxx    │   │                           │
-│       SIM_TICK_MS=100       │   │  expose: 3001             │
-│                             │   │  (HTTP + WS)              │
-│  expose: <plc.port>         │   │                           │
-│  (OPC-UA, single port)      │   │                           │
+│  env: PLANT_CONFIG=/config  │   │       BE_HOST=0.0.0.0     │
+│       SIM_PLC_ID=plc_xxx    │   │       BE_PORT=3001        │
+│       SIM_TICK_MS=100       │   │       BE_TICK_MS=100      │
+│       OPCUA_HOST=plc_xxx    │   │       PKI_DIR=/data/pki   │
+│       PKI_DIR=/data/pki     │   │       OPCUA_URI_OVERRIDE= │
+│                             │   │           (unset)         │
+│  bind: 0.0.0.0              │   │                           │
+│  expose: <plc.port>         │   │  expose: 3001             │
+│  (OPC-UA, single port)      │   │  (HTTP + WS)              │
 └─────────────────────────────┘   └───────────────────────────┘
 ```
 
-In dev: `just sim-all` + `just be`. In prod: `N + 1` containers (one simulator per `simulated: true` PLC in `plant.json`, plus the backend), `config/` volume-mounted into each.
+In dev: `just sim-all` + `just be`. `.env` sets `OPCUA_HOST=127.0.0.1` and `OPCUA_URI_OVERRIDE=opc.tcp://127.0.0.1` so the host machine reaches simulators on loopback. In prod: `N + 1` containers (one simulator per `simulated: true` PLC in `plant.json`, plus the backend), `config/` volume-mounted into each. Docker's service-name DNS resolves `opc.tcp://{plc_id}:port` natively — no override needed.
+
+**PLC URI convention.** `PlcConfig.uri` is `Option<String>`. When absent (the default), the backend derives `opc.tcp://{plc_id}` — which is the Docker/k8s service-name DNS form. Set it explicitly in `plant.json` only when the PLC lives on a static IP or a non-standard hostname (e.g. a real hardware PLC at `opc.tcp://192.168.1.10`). Never set it to `localhost` in `plant.json`; use `OPCUA_URI_OVERRIDE` for that in the local dev `.env` file.
+
+**Containerization.** `just compose-gen` regenerates `docker-compose.yml` from `plant.json`. Each simulated PLC becomes its own service named after its `plc_id`. Rebuild when the PLC topology changes. The same service-name convention works under k8s with no changes to `plant.json`.
+
+**Env-var surface:**
+
+| Var                  | Used by   | Purpose                                                              |
+|----------------------|-----------|----------------------------------------------------------------------|
+| `PLANT_CONFIG`       | both      | Path to directory holding `plant.json` + `device_types.json`         |
+| `SIM_PLC_ID`         | simulator | Which PLC this process owns (required)                               |
+| `SIM_TICK_MS`        | simulator | Physics tick cadence (default 100)                                   |
+| `OPCUA_HOST`         | simulator | Hostname advertised in OPC-UA discovery URLs (default: `HOSTNAME`)   |
+| `PKI_DIR`            | both      | Where the OPC-UA crate writes its auto-generated keypair (default `./pki`) |
+| `BE_HOST/PORT/TICK_MS` | backend | WS+HTTP bind address + tick rate                                     |
+| `OPCUA_URI_OVERRIDE` | backend   | Rewrite the host portion of every PLC URL — dev-only escape hatch    |
 
 ---
 
@@ -210,6 +230,7 @@ In dev: `just sim-all` + `just be`. In prod: `N + 1` containers (one simulator p
 | `/ws`                   | WS     | full `IngestedState` every tick (JSON)   |
 | `/api/plant`            | GET    | `PlantConfig` — static topology         |
 | `/api/log-level?set=…`  | GET    | reload tracing filter at runtime         |
+| `/health`               | GET    | `{"status":"ok"}` — Docker healthcheck  |
 
 ---
 

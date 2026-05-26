@@ -56,9 +56,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    tracing::info!("\n  ══ Running — press Ctrl-C to stop ══\n");
-    tokio::signal::ctrl_c().await?;
+    tracing::info!("\n  ══ Running — press Ctrl-C or send SIGTERM to stop ══\n");
+    shutdown_signal().await;
 
-    tracing::info!("\n  Ctrl-C received — shutting down\n");
+    tracing::info!("\n  Shutdown signal received — exiting\n");
     Ok(())
+}
+
+/// Resolve when SIGINT (Ctrl-C) or SIGTERM (Docker stop) arrives.
+/// Installing the SIGTERM handler is essential under Docker: without it the runtime
+/// receives the default action (terminate) only after the kernel sends SIGKILL.
+async fn shutdown_signal() {
+    let ctrl_c = async { tokio::signal::ctrl_c().await.ok(); };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut sig) = signal(SignalKind::terminate()) { sig.recv().await; }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
 }

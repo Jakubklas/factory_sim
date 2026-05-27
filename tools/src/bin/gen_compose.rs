@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writeln!(out, "      context: frontend")?;
     writeln!(out, "      dockerfile: Dockerfile")?;
     writeln!(out, "    environment:")?;
-    writeln!(out, "      BE_URL: http://localhost:3001")?;
+    writeln!(out, "      BE_URL: ${{BE_URL:-http://localhost:3001}}")?;
     writeln!(out, "    ports:")?;
     writeln!(out, "      - \"8080:80\"")?;
     writeln!(out, "    depends_on:")?;

@@ -88,8 +88,20 @@ fi
 # ── .env for compose (BE_URL uses the instance's public IP) ─────────────────
 cd "$APP_DIR"
 if [ ! -f .env ]; then
-    PUBLIC_IP=$(curl -sf --max-time 2 http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null \
-        || hostname -I | awk '{print $1}')
+    # Try EC2 IMDSv2 token-based lookup first, fall back to IMDSv1, then private IP
+    IMDS_TOKEN=$(curl -sf --max-time 2 -X PUT \
+        "http://169.254.169.254/latest/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)
+    if [ -n "$IMDS_TOKEN" ]; then
+        PUBLIC_IP=$(curl -sf --max-time 2 \
+            -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+            http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || true)
+    fi
+    if [ -z "$PUBLIC_IP" ]; then
+        PUBLIC_IP=$(curl -sf --max-time 2 \
+            http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null \
+            || hostname -I | awk '{print $1}')
+    fi
     log "Public IP: ${PUBLIC_IP}"
     echo "BE_URL=http://${PUBLIC_IP}:3001" > .env
     log "Wrote .env"

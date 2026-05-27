@@ -70,7 +70,7 @@ services:
       context: frontend
       dockerfile: Dockerfile
     environment:
-      BE_URL: http://localhost:3001
+      BE_URL: ${BE_URL:-http://localhost:3001}
     ports:
       - "8080:80"
     depends_on:

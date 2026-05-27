@@ -1,5 +1,5 @@
 // Generate a docker-compose.yml from PLANT_CONFIG.
-// Usage: cargo run -p tools --bin gen_compose > docker-compose.yml
+// Usage: cargo run -p codegen --bin gen_compose > docker-compose.yml
 //
 // One simulator service per simulated PLC + one backend + one frontend.
 // All share a read-only config volume. PKI data lands in per-service volumes.

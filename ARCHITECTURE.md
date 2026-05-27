@@ -209,6 +209,12 @@ In dev: `just sim-all` + `just be`. `.env` sets `OPCUA_HOST=127.0.0.1` and `OPCU
 
 **Containerization.** `just compose-gen` regenerates `docker-compose.yml` from `plant.json`. Each simulated PLC becomes its own service named after its `plc_id`. Rebuild when the PLC topology changes. The same service-name convention works under k8s with no changes to `plant.json`.
 
+**Registry & CI/CD.** Images are published to `ghcr.io/jakubklas/factory_sim/{simulator,backend,frontend}:latest`. Every push to `main` triggers a GitHub Actions workflow (`.github/workflows/build-push.yml`) that builds and pushes all three images using BuildKit layer caching stored in GHCR — so Rust dependency layers survive between runs and only recompile when `Cargo.lock` changes. Deployment targets pull pre-built images; they never compile from source.
+
+- `just push` — build + push locally (manual escape hatch; requires `gh auth refresh -h github.com -s write:packages`)
+- `just deploy <host>` — bootstrap a fresh Linux machine: installs Docker, clones repo, pulls images, starts stack
+- `just redeploy <host>` — on an already-running host: `git pull` + `docker compose pull` + restart
+
 **Env-var surface:**
 
 | Var                  | Used by   | Purpose                                                              |

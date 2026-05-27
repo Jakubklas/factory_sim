@@ -13,8 +13,8 @@ RUN npm run build
 FROM nginx:1.27-alpine
 
 COPY --from=builder /app/dist /usr/share/nginx/html
-COPY nginx.conf /etc/nginx/conf.d/default.conf
-COPY entrypoint.sh /entrypoint.sh
+COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
+COPY docker/entrypoint.sh /entrypoint.sh
 
 RUN chmod +x /entrypoint.sh && \
     printf 'window.__env = { BE_URL: "${BE_URL}" };\n' > /env.template

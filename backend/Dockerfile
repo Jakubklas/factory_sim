@@ -12,14 +12,14 @@ COPY Cargo.toml Cargo.lock ./
 COPY plant_config/Cargo.toml plant_config/Cargo.toml
 COPY backend/Cargo.toml      backend/Cargo.toml
 COPY simulator/Cargo.toml    simulator/Cargo.toml
-COPY tools/Cargo.toml        tools/Cargo.toml
+COPY codegen/Cargo.toml      codegen/Cargo.toml
 
 # Dummy source files so cargo can resolve the workspace without the real source.
-RUN mkdir -p plant_config/src backend/src simulator/src tools/src/bin && \
+RUN mkdir -p plant_config/src backend/src simulator/src codegen/src/bin && \
     echo 'pub fn _dummy() {}' > plant_config/src/lib.rs && \
     echo 'fn main() {}' > backend/src/main.rs && \
     echo 'fn main() {}' > simulator/src/main.rs && \
-    echo 'fn main() {}' > tools/src/bin/gen_compose.rs && \
+    echo 'fn main() {}' > codegen/src/bin/gen_compose.rs && \
     cargo build --release -p backend 2>/dev/null || true
 
 COPY plant_config/ plant_config/

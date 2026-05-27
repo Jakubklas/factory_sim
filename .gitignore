@@ -6,7 +6,6 @@ Cargo.lock
 # Node.js
 frontend/node_modules/
 frontend/dist/
-frontend/package-lock.json
 
 # IDE
 .vscode/

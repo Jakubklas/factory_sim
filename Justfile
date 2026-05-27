@@ -1,6 +1,9 @@
 set dotenv-load
 
-config_dir := justfile_directory() + "/config"
+config_dir  := justfile_directory() + "/config"
+deploy_key  := env_var_or_default("DEPLOY_KEY", "~/.ssh/factory_sim_ec2")
+deploy_user := env_var_or_default("DEPLOY_USER", "ec2-user")
+registry    := env_var_or_default("IMAGE_REGISTRY", "ghcr.io/jakubklas/factory_sim")
 
 # Start the backend (API + connectors)
 be:
@@ -26,7 +29,15 @@ compose-gen:
 
 # Build all container images
 docker-build:
+    IMAGE_REGISTRY={{registry}} just compose-gen
     docker compose build
+
+# Build, tag with GHCR names, and push all images.  Requires: gh auth login
+push:
+    IMAGE_REGISTRY={{registry}} just compose-gen
+    gh auth token | docker login ghcr.io -u jakubklas --password-stdin
+    docker compose build
+    docker compose push
 
 # Start the full stack in detached mode
 docker-up:
@@ -39,3 +50,23 @@ docker-down:
 # Stream logs for a specific service.   Usage: just docker-logs backend
 docker-logs SVC:
     docker compose logs -f {{SVC}}
+
+# ── Remote deploy ─────────────────────────────────────────────────────────────
+
+# Bootstrap + deploy to a fresh Linux host.
+# Usage: just deploy 1.2.3.4
+# Override key/user: DEPLOY_KEY=~/.ssh/other.pem DEPLOY_USER=ubuntu just deploy 1.2.3.4
+deploy HOST:
+    ssh -i {{deploy_key}} -o StrictHostKeyChecking=no {{deploy_user}}@{{HOST}} 'bash -s' \
+        < {{justfile_directory()}}/deploy/bootstrap.sh
+
+# Pull latest code and restart the stack on a deployed host.
+# Usage: just redeploy 1.2.3.4
+redeploy HOST:
+    ssh -i {{deploy_key}} -o StrictHostKeyChecking=no {{deploy_user}}@{{HOST}} \
+        'cd ~/factory_sim && git pull --ff-only && sudo docker compose pull && sudo docker compose up -d'
+
+# Stream live logs from a deployed host.   Usage: just remote-logs 1.2.3.4
+remote-logs HOST:
+    ssh -i {{deploy_key}} -o StrictHostKeyChecking=no {{deploy_user}}@{{HOST}} \
+        'cd ~/factory_sim && sudo docker compose logs -f'

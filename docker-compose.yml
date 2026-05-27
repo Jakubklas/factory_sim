@@ -3,6 +3,7 @@
 
 services:
   plc_001:
+    image: ghcr.io/jakubklas/factory_sim/simulator:latest
     build:
       context: .
       dockerfile: simulator/Dockerfile
@@ -20,6 +21,7 @@ services:
     restart: unless-stopped
 
   plc_002:
+    image: ghcr.io/jakubklas/factory_sim/simulator:latest
     build:
       context: .
       dockerfile: simulator/Dockerfile
@@ -37,6 +39,7 @@ services:
     restart: unless-stopped
 
   backend:
+    image: ghcr.io/jakubklas/factory_sim/backend:latest
     build:
       context: .
       dockerfile: backend/Dockerfile
@@ -62,6 +65,7 @@ services:
     restart: unless-stopped
 
   frontend:
+    image: ghcr.io/jakubklas/factory_sim/frontend:latest
     build:
       context: frontend
       dockerfile: Dockerfile

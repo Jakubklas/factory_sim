@@ -9,6 +9,8 @@ use plant_config::loader::load_plant_config;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config_dir = std::env::var("PLANT_CONFIG")
         .unwrap_or_else(|_| "./config".to_string());
+    let registry = std::env::var("IMAGE_REGISTRY")
+        .unwrap_or_else(|_| "ghcr.io/jakubklas/factory_sim".to_string());
 
     let plant_path = format!("{}/plant.json", config_dir);
     let plant = load_plant_config(&plant_path)?;
@@ -26,6 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Simulator services — one per simulated PLC
     for plc in &simulated_plcs {
         writeln!(out, "  {}:", plc.plc_id)?;
+        writeln!(out, "    image: {}/simulator:latest", registry)?;
         writeln!(out, "    build:")?;
         writeln!(out, "      context: .")?;
         writeln!(out, "      dockerfile: simulator/Dockerfile")?;
@@ -46,6 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Backend service
     writeln!(out, "  backend:")?;
+    writeln!(out, "    image: {}/backend:latest", registry)?;
     writeln!(out, "    build:")?;
     writeln!(out, "      context: .")?;
     writeln!(out, "      dockerfile: backend/Dockerfile")?;
@@ -76,6 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Frontend service
     writeln!(out, "  frontend:")?;
+    writeln!(out, "    image: {}/frontend:latest", registry)?;
     writeln!(out, "    build:")?;
     writeln!(out, "      context: frontend")?;
     writeln!(out, "      dockerfile: Dockerfile")?;

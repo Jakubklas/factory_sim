@@ -36,7 +36,7 @@ Industrial-twin platform. A simulator emits OPC-UA telemetry indistinguishable f
 
 ---
 
-## The three crates
+## The four crates
 
 ```
 ┌─ plant_config ────────────────────────────────────┐
@@ -73,6 +73,17 @@ Industrial-twin platform. A simulator emits OPC-UA telemetry indistinguishable f
 │  YES — polls any       │  │  YES — exposes OPC-UA,   │
 │  reachable OPC-UA      │  │  needs nothing else      │
 └────────────────────────┘  └──────────────────────────┘
+
+┌─ codegen ─────────────────────────────────────────┐
+│  Dev-time tooling only. Never runs in production.  │
+│                                                    │
+│  src/bin/gen_compose.rs                            │
+│    reads plant.json → writes docker-compose.yml    │
+│    run via: just compose-gen                       │
+│                                                    │
+│  depends on plant_config (to parse plant.json)     │
+│  output is committed and consumed by Docker        │
+└────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -182,38 +193,92 @@ State-sharing primitives:
 
 ## Deployment
 
-Each binary is a leaf process with one config-volume input and one network port output. No shared filesystem or runtime state. One simulator container per simulated PLC; the topology (which PLCs exist) lives entirely in `plant.json`, so orchestration is `N + 1` containers derived mechanically from config.
+### Container layout
+
+Each binary is a leaf process: one config-volume input, one network port output, no shared filesystem. The stack is `N + 2` containers — N simulators (one per `simulated: true` PLC in `plant.json`) + backend + frontend.
 
 ```
 ┌─ container: simulator ──────┐   ┌─ container: backend ──────┐
 │  (one per simulated PLC)    │   │                           │
-│                             │   │  /config  ◄─── volume     │
-│  /config  ◄─── volume       │   │  /data    ◄─── volume(rw) │
-│  /data    ◄─── volume(rw)   │   │                           │
-│                             │   │  env: PLANT_CONFIG=/config│
-│  env: PLANT_CONFIG=/config  │   │       BE_HOST=0.0.0.0     │
-│       SIM_PLC_ID=plc_xxx    │   │       BE_PORT=3001        │
-│       SIM_TICK_MS=100       │   │       BE_TICK_MS=100      │
-│       OPCUA_HOST=plc_xxx    │   │       PKI_DIR=/data/pki   │
-│       PKI_DIR=/data/pki     │   │       OPCUA_URI_OVERRIDE= │
-│                             │   │           (unset)         │
-│  bind: 0.0.0.0              │   │                           │
-│  expose: <plc.port>         │   │  expose: 3001             │
-│  (OPC-UA, single port)      │   │  (HTTP + WS)              │
+│  /config  ◄─── volume (ro)  │   │  /config  ◄─── volume(ro) │
+│  /data    ◄─── volume (rw)  │   │  /data    ◄─── volume(rw) │
+│                             │   │                           │
+│  env: PLANT_CONFIG=/config  │   │  env: PLANT_CONFIG=/config│
+│       SIM_PLC_ID=plc_xxx    │   │       BE_HOST=0.0.0.0     │
+│       SIM_TICK_MS=100       │   │       BE_PORT=3001        │
+│       OPCUA_HOST=plc_xxx    │   │       BE_TICK_MS=100      │
+│       PKI_DIR=/data/pki     │   │       PKI_DIR=/data/pki   │
+│                             │   │                           │
+│  expose: <plc.port> (OPC-UA)│   │  expose: 3001 (HTTP + WS) │
 └─────────────────────────────┘   └───────────────────────────┘
+
+┌─ container: frontend ───────┐
+│  nginx:alpine + built SPA   │
+│  env: BE_URL=http://<ip>:3001  (written by bootstrap or .env)
+│  expose: 8080               │
+└─────────────────────────────┘
 ```
 
-In dev: `just sim-all` + `just be`. `.env` sets `OPCUA_HOST=127.0.0.1` and `OPCUA_URI_OVERRIDE=opc.tcp://127.0.0.1` so the host machine reaches simulators on loopback. In prod: `N + 1` containers (one simulator per `simulated: true` PLC in `plant.json`, plus the backend), `config/` volume-mounted into each. Docker's service-name DNS resolves `opc.tcp://{plc_id}:port` natively — no override needed.
+In dev: `just sim-all` + `just be` + `npm run dev`. Set `OPCUA_URI_OVERRIDE=opc.tcp://127.0.0.1` in `.env` so the backend reaches simulators on loopback. In prod: Docker's service-name DNS resolves `opc.tcp://{plc_id}` natively — no override needed.
 
-**PLC URI convention.** `PlcConfig.uri` is `Option<String>`. When absent (the default), the backend derives `opc.tcp://{plc_id}` — which is the Docker/k8s service-name DNS form. Set it explicitly in `plant.json` only when the PLC lives on a static IP or a non-standard hostname (e.g. a real hardware PLC at `opc.tcp://192.168.1.10`). Never set it to `localhost` in `plant.json`; use `OPCUA_URI_OVERRIDE` for that in the local dev `.env` file.
+**PLC URI convention.** `PlcConfig.uri` is `Option<String>`. When absent (the default), the backend derives `opc.tcp://{plc_id}` — the Docker/k8s service-name DNS form. Set it explicitly only when a PLC lives on a static IP (e.g. a real hardware PLC at `opc.tcp://192.168.1.10`). Never hardcode `localhost` in `plant.json`; use `OPCUA_URI_OVERRIDE` in a local dev `.env` instead.
 
-**Containerization.** `just compose-gen` regenerates `docker-compose.yml` from `plant.json`. Each simulated PLC becomes its own service named after its `plc_id`. Rebuild when the PLC topology changes. The same service-name convention works under k8s with no changes to `plant.json`.
+---
 
-**Registry & CI/CD.** Images are published to `ghcr.io/jakubklas/factory_sim/{simulator,backend,frontend}:latest`. Every push to `main` triggers a GitHub Actions workflow (`.github/workflows/build-push.yml`) that builds and pushes all three images using BuildKit layer caching stored in GHCR — so Rust dependency layers survive between runs and only recompile when `Cargo.lock` changes. Deployment targets pull pre-built images; they never compile from source.
+### Topology changes → compose regeneration
 
-- `just push` — build + push locally (manual escape hatch; requires `gh auth refresh -h github.com -s write:packages`)
-- `just deploy <host>` — bootstrap a fresh Linux machine: installs Docker, clones repo, pulls images, starts stack
-- `just redeploy <host>` — on an already-running host: `git pull` + `docker compose pull` + restart
+`docker-compose.yml` is **generated from `plant.json`**, never edited by hand. The `codegen` crate contains the generator.
+
+```
+  config/plant.json       edit: add PLCs, change ports, flip simulated: true
+        │
+        ▼
+  just compose-gen        runs codegen/src/bin/gen_compose.rs
+        │                 one service per simulated PLC, image refs point to GHCR
+        ▼
+  docker-compose.yml      commit this — consumed by Docker on every host
+```
+
+Run `just compose-gen` whenever the PLC topology changes, then commit the result. The service-name convention (`opc.tcp://{plc_id}`) works unchanged under k8s.
+
+---
+
+### CI/CD pipeline
+
+Images are never built on the deployment target. They are built once by CI and stored in GHCR; hosts only pull.
+
+```
+  git push → main
+        │
+        ▼
+  GitHub Actions  (.github/workflows/build-push.yml)
+        │  builds simulator, backend, frontend
+        │  BuildKit layer cache stored in GHCR
+        │    → Rust deps only recompile when Cargo.lock changes
+        │    → warm build ~1 min,  cold build ~15 min
+        ▼
+  GHCR  ghcr.io/jakubklas/factory_sim/{simulator,backend,frontend}:latest
+        │
+        ▼  just redeploy <host>
+  deployment host
+        │  git pull          (picks up new docker-compose.yml if topology changed)
+        │  docker compose pull
+        │  docker compose up -d
+        ▼
+  running stack
+```
+
+**Key commands:**
+
+| Command | What it does |
+|---|---|
+| `just compose-gen` | Regenerate `docker-compose.yml` from `plant.json` |
+| `just push` | Build + push images locally (escape hatch; needs `write:packages` scope) |
+| `just deploy <host>` | Bootstrap a fresh Linux machine: install Docker, clone repo, pull images, start stack |
+| `just redeploy <host>` | On a running host: `git pull` + `docker compose pull` + restart |
+| `just remote-logs <host>` | Stream live logs from a deployed host |
+
+---
 
 **Env-var surface:**
 

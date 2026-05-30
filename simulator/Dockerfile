@@ -1,11 +1,25 @@
 # ── Stage 1: build ───────────────────────────────────────────────────────────
-FROM rust:1.87-slim AS builder
+# Always runs on the CI host's native arch (amd64). Cross-compiles to TARGETARCH.
+FROM --platform=$BUILDPLATFORM rust:1.87-slim AS builder
+
+ARG TARGETARCH
 
 WORKDIR /build
 
-# opcua crate links against openssl.
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && \
+# Cross-linker for arm64. OpenSSL is vendored (compiled from source) so no
+# target sysroot headers are needed — pkg-config only sees the host arch.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config gcc-aarch64-linux-gnu && \
     rm -rf /var/lib/apt/lists/*
+
+# Resolve Rust target triple and add it.
+RUN case "$TARGETARCH" in \
+    amd64) echo "x86_64-unknown-linux-gnu"  ;; \
+    arm64) echo "aarch64-unknown-linux-gnu" ;; \
+    esac > /rust_target && \
+    rustup target add "$(cat /rust_target)"
+
+ENV CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
 
 # Cache dependency compilation separately from source changes.
 COPY Cargo.toml Cargo.lock ./
@@ -14,26 +28,29 @@ COPY backend/Cargo.toml      backend/Cargo.toml
 COPY simulator/Cargo.toml    simulator/Cargo.toml
 COPY codegen/Cargo.toml      codegen/Cargo.toml
 
-# Dummy source files so cargo can resolve the workspace without the real source.
 RUN mkdir -p plant_config/src backend/src simulator/src codegen/src/bin && \
     echo 'pub fn _dummy() {}' > plant_config/src/lib.rs && \
     echo 'fn main() {}' > backend/src/main.rs && \
     echo 'fn main() {}' > simulator/src/main.rs && \
     echo 'fn main() {}' > codegen/src/bin/gen_compose.rs && \
-    cargo build --release -p simulator 2>/dev/null || true
+    echo 'fn main() {}' > codegen/src/bin/gen_compose_device.rs && \
+    TARGET=$(cat /rust_target) && \
+    cargo build --release -p simulator --target "$TARGET" 2>/dev/null || true
 
 # Copy real source and build.
 COPY plant_config/ plant_config/
 COPY simulator/    simulator/
 RUN touch plant_config/src/lib.rs simulator/src/main.rs && \
-    cargo build --release -p simulator
+    TARGET=$(cat /rust_target) && \
+    cargo build --release -p simulator --target "$TARGET" && \
+    cp "target/$TARGET/release/simulator" /usr/local/bin/simulator
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 && \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/simulator /usr/local/bin/simulator
+COPY --from=builder /usr/local/bin/simulator /usr/local/bin/simulator
 
 ENTRYPOINT ["/usr/local/bin/simulator"]

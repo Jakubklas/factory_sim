@@ -11,6 +11,7 @@ path = "src/main.rs"
 plant_config = { path = "../plant_config" }
 # OPC-UA server and client
 opcua = { version = "0.12", features = ["server", "client"] }
+openssl = { version = "0.10", features = ["vendored"] }
 
 # Async runtime
 tokio = { version = "1.41", features = ["full"] }

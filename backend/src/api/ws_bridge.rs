@@ -102,14 +102,26 @@ async fn health_handler() -> impl IntoResponse {
 
 async fn stream_state(mut socket: WebSocket, ingested: Arc<RwLock<IngestedState>>, tick_ms: u64) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(tick_ms));
+    let mut log_counter = 0;
+    let log_interval = 10000 / tick_ms; // Log every 10 seconds
+    
     loop {
         interval.tick().await;
+        log_counter += 1;
 
         let snapshot = ingested.read().await.clone();
         let Ok(json) = serde_json::to_string(&snapshot) else { continue };
 
         if socket.send(Message::Text(json.into())).await.is_err() {
             break;
+        }
+        
+        if log_counter >= log_interval {
+            log_counter = 0;
+            tracing::info!("[WebSocket] Telemetry update sent to client - {} devices", snapshot.len());
+            for (device_id, fields) in snapshot.iter().take(3) {
+                tracing::info!("[WebSocket]   {}: {:?}", device_id, fields);
+            }
         }
     }
 }

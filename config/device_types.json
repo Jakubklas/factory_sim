@@ -66,6 +66,20 @@
         { "name": "valve_position", "description": "Upstream valve position (0-1)", "data_type": "Float", "initial_value": 0.0   },
         { "name": "status",         "description": "Flow status",                   "data_type": "Str",   "initial_value": "Low" }
       ]
+    },
+    {
+      "device_type": "CyclicalValve",
+      "physics_mode": "Simulation",
+      "physics_definition": "state[\"time_counter\"] = state[\"time_counter\"] + dt;\nlet cycle_time = 80.0;\nlet quarter_cycle = cycle_time / 4.0;\nlet time_in_cycle = state[\"time_counter\"] % cycle_time;\nif time_in_cycle < quarter_cycle {\n  state[\"position\"] = 0.25;\n} else if time_in_cycle < quarter_cycle * 2.0 {\n  state[\"position\"] = 0.5;\n} else if time_in_cycle < quarter_cycle * 3.0 {\n  state[\"position\"] = 0.75;\n} else {\n  state[\"position\"] = 1.0;\n}\nif state[\"position\"] >= 0.99 {\n  state[\"status\"] = \"Open\";\n} else if state[\"position\"] <= 0.26 {\n  state[\"status\"] = \"Quarter\";\n} else if state[\"position\"] <= 0.51 {\n  state[\"status\"] = \"Half\";\n} else {\n  state[\"status\"] = \"ThreeQuarter\";\n}\nstate[\"inlet_pressure\"] = 5.0;\nstate[\"outlet_pressure\"] = state[\"inlet_pressure\"] * state[\"position\"];",
+      "required_params": [],
+      "functions": [],
+      "metrics": [
+        { "name": "position",        "description": "Valve position (0=closed, 1=open)", "data_type": "Float", "initial_value": 0.25    },
+        { "name": "inlet_pressure",  "description": "Upstream pressure (bar)",           "data_type": "Float", "initial_value": 5.0     },
+        { "name": "outlet_pressure", "description": "Downstream pressure (bar)",         "data_type": "Float", "initial_value": 1.25    },
+        { "name": "status",          "description": "Valve status",                      "data_type": "Str",   "initial_value": "Quarter" },
+        { "name": "time_counter",    "description": "Internal time counter (seconds)",   "data_type": "Float", "initial_value": 0.0     }
+      ]
     }
   ]
 }

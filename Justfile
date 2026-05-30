@@ -80,6 +80,11 @@ deploy-device DEVICE:
     #!/bin/bash
     set -euo pipefail
     
+    # Generate device-specific compose file locally
+    echo "Generating compose file for {{DEVICE}}"
+    DEVICE={{DEVICE}} IMAGE_REGISTRY={{registry}} PLANT_CONFIG={{config_dir}} \
+        cargo run -p codegen --bin gen_compose_device > docker-compose.{{DEVICE}}.yml
+    
     # Load device metadata
     DEVICE_DATA=$(jq -r '.devices.{{DEVICE}}' {{justfile_directory()}}/deploy/inventory.json)
     HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
@@ -93,10 +98,12 @@ deploy-device DEVICE:
     
     echo "Deploying to {{DEVICE}} ($SSH_USER@$HOST)"
     
-    # Generate device-specific bootstrap script
-    cat {{justfile_directory()}}/deploy/bootstrap.sh | \
+    # Copy device-specific files and deploy
+    scp -i "$SSH_KEY" -o StrictHostKeyChecking=no \
+        docker-compose.{{DEVICE}}.yml "$SSH_USER@$HOST":~/factory_sim/docker-compose.yml
+    
     ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
-        "DEPLOY_DEVICE={{DEVICE}} bash -s"
+        'cd ~/factory_sim && sudo docker compose build && sudo docker compose up -d'
 
 # Redeploy to a specific device.  Usage: just redeploy-device ec2
 redeploy-device DEVICE:
@@ -138,7 +145,7 @@ logs-device DEVICE:
 
 # List all configured devices
 list-devices:
-    jq -r '.devices | to_entries[] | "\(.key): \(.value.name) (\(.value.host)) - Environment: \(.value.environment)"' \
+    jq -r '.devices | to_entries[] | "\(.key): \(.value.name) (\(.value.host)) - \(.value.environment)/\(.value.architecture)"' \
         {{justfile_directory()}}/deploy/inventory.json
 
 # Deploy all PLCs to their target devices (reads from plant.json)

@@ -1,0 +1,61 @@
+# Device-specific compose for: ec2
+# Auto-generated — do not edit by hand
+
+services:
+  plc_001:
+    build:
+      context: .
+      dockerfile: simulator/Dockerfile
+    image: ghcr.io/jakubklas/factory_sim/simulator:latest
+    environment:
+      PLANT_CONFIG: /config
+      SIM_PLC_ID: plc_001
+      SIM_TICK_MS: 100
+      OPCUA_HOST: plc_001
+      PKI_DIR: /data/pki
+    volumes:
+      - ./config:/config:ro
+      - plc_001_data:/data
+    ports:
+      - "4840:4840"
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: ghcr.io/jakubklas/factory_sim/backend:latest
+    environment:
+      PLANT_CONFIG: /config
+      BE_HOST: 0.0.0.0
+      BE_PORT: 3001
+      BE_TICK_MS: 100
+      PKI_DIR: /data/pki
+    volumes:
+      - ./config:/config:ro
+      - backend_data:/data
+    ports:
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    image: ghcr.io/jakubklas/factory_sim/frontend:latest
+    environment:
+      BE_URL: ${BE_URL:-http://localhost:3001}
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  plc_001_data:
+  backend_data:

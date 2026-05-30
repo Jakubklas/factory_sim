@@ -34,19 +34,6 @@
             "target_pressure": 3.0,
             "kp": 0.05
           }
-        },
-        {
-          "device_id": "flow_meter_001",
-          "name": "Main Flow Meter",
-          "device_type": "FlowMeter",
-          "input_variables": [
-            { "name": "inlet_pressure", "source_device_id": "valve_001", "source_field": "outlet_pressure" },
-            { "name": "valve_position", "source_device_id": "valve_001", "source_field": "position" }
-          ],
-          "params": {
-            "coefficient": 10.0,
-            "accumulate_volume": 1.0
-          }
         }
       ]
     },
@@ -55,10 +42,31 @@
       "name": "Bypass PLC",
       "simulated": true,
       "protocol": "opcua",
+      "uri": "opc.tcp://100.101.6.122",
       "port": 4841,
       "endpoint": "/",
       "deploy_target": "pi",
       "devices": [
+        {
+          "device_id": "cyclical_valve_001",
+          "name": "Cyclical Outlet Valve",
+          "device_type": "CyclicalValve",
+          "input_variables": [],
+          "params": {}
+        },
+        {
+          "device_id": "flow_meter_001",
+          "name": "Main Flow Meter",
+          "device_type": "FlowMeter",
+          "input_variables": [
+            { "name": "inlet_pressure", "source_device_id": "cyclical_valve_001", "source_field": "outlet_pressure" },
+            { "name": "valve_position", "source_device_id": "cyclical_valve_001", "source_field": "position" }
+          ],
+          "params": {
+            "coefficient": 10.0,
+            "accumulate_volume": 1.0
+          }
+        },
         {
           "device_id": "flow_meter_002",
           "name": "Bypass Flow Meter",

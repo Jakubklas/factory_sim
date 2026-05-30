@@ -5,14 +5,16 @@
       "host": "100.89.31.46",
       "description": "Primary cloud deployment via Tailscale",
       "environment": "aws",
-      "credential_profile": "ec2"
+      "credential_profile": "ec2",
+      "architecture": "amd64"
     },
     "pi": {
       "name": "Raspberry Pi",
       "host": "100.101.6.122", 
       "description": "Edge device via Tailscale",
       "environment": "edge",
-      "credential_profile": "pi"
+      "credential_profile": "pi",
+      "architecture": "arm64"
     }
   }
 }

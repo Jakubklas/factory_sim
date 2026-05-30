@@ -15,6 +15,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "ghcr.io/jakubklas/factory_sim".to_string());
     let device = std::env::var("DEVICE")
         .expect("DEVICE environment variable required");
+    
+    // Load inventory to get device architecture
+    let inventory_path = format!("{}/deploy/inventory.json", std::env::current_dir()?.display());
+    let inventory_json = std::fs::read_to_string(&inventory_path)?;
+    let inventory: serde_json::Value = serde_json::from_str(&inventory_json)?;
+    let device_arch = inventory["devices"][&device]["architecture"]
+        .as_str()
+        .unwrap_or("amd64");
+    
+    // Use latest tag for all architectures (multi-arch handled by Docker registry)
+    let image_tag = "latest";
 
     // Load configurations
     let plant_path = format!("{}/plant.json", config_dir);
@@ -42,7 +53,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // PLCs for this device
     for plc in &device_plcs {
         writeln!(out, "  {}:", plc.plc_id)?;
-        writeln!(out, "    image: {}/simulator:latest", registry)?;
+        writeln!(out, "    build:")?;
+        writeln!(out, "      context: .")?;
+        writeln!(out, "      dockerfile: simulator/Dockerfile")?;
+        writeln!(out, "    image: {}/simulator:{}", registry, image_tag)?;
         writeln!(out, "    environment:")?;
         writeln!(out, "      PLANT_CONFIG: /config")?;
         writeln!(out, "      SIM_PLC_ID: {}", plc.plc_id)?;
@@ -61,7 +75,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Backend (if assigned to this device)
     if should_run_backend {
         writeln!(out, "  backend:")?;
-        writeln!(out, "    image: {}/backend:latest", registry)?;
+        writeln!(out, "    build:")?;
+        writeln!(out, "      context: .")?;
+        writeln!(out, "      dockerfile: backend/Dockerfile")?;
+        writeln!(out, "    image: {}/backend:{}", registry, image_tag)?;
         writeln!(out, "    environment:")?;
         writeln!(out, "      PLANT_CONFIG: /config")?;
         writeln!(out, "      BE_HOST: 0.0.0.0")?;
@@ -85,7 +102,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Frontend (if assigned to this device)
     if should_run_frontend {
         writeln!(out, "  frontend:")?;
-        writeln!(out, "    image: {}/frontend:latest", registry)?;
+        writeln!(out, "    build:")?;
+        writeln!(out, "      context: frontend")?;
+        writeln!(out, "      dockerfile: Dockerfile")?;
+        writeln!(out, "    image: {}/frontend:{}", registry, image_tag)?;
         writeln!(out, "    environment:")?;
         writeln!(out, "      BE_URL: ${{BE_URL:-http://localhost:3001}}")?;
         writeln!(out, "    ports:")?;

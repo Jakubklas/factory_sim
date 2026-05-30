@@ -1,9 +1,7 @@
 set dotenv-load
 
-config_dir  := justfile_directory() + "/config"
-deploy_key  := env_var_or_default("DEPLOY_KEY", "~/.ssh/id_ed25519")
-deploy_user := env_var_or_default("DEPLOY_USER", "ec2-user")
-registry    := env_var_or_default("IMAGE_REGISTRY", "ghcr.io/jakubklas/factory_sim")
+config_dir := justfile_directory() + "/config"
+registry   := env_var_or_default("IMAGE_REGISTRY", "ghcr.io/jakubklas/factory_sim")
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
@@ -11,7 +9,7 @@ registry    := env_var_or_default("IMAGE_REGISTRY", "ghcr.io/jakubklas/factory_s
 be:
     PLANT_CONFIG={{config_dir}} cargo run -p backend
 
-# Run the simulator for one PLC.  Usage: just sim plc_001
+# Run the simulator for one PLC.  Usage: just sim plc-001
 sim PLC:
     SIM_PLC_ID={{PLC}} PLANT_CONFIG={{config_dir}} cargo run -p simulator
 
@@ -22,64 +20,33 @@ sim-all:
       | xargs -I{} -P0 env SIM_PLC_ID={} PLANT_CONFIG={{config_dir}} \
         ./target/debug/simulator
 
-# ── Docker ────────────────────────────────────────────────────────────────────
+# ── k3s / Helm ────────────────────────────────────────────────────────────────
 
-# Regenerate docker-compose.yml from plant.json
-compose-gen:
+# Generate helm/factory-sim/values.yaml from plant.json + platform.json + inventory.json
+helm-gen:
     IMAGE_REGISTRY={{registry}} PLANT_CONFIG={{config_dir}} \
-        cargo run -p codegen --bin gen_compose > docker-compose.yml
-    @echo "docker-compose.yml written"
+        cargo run -p codegen --bin gen_helm_values > helm/factory-sim/values.yaml
+    @echo "helm/factory-sim/values.yaml written"
 
-# Build all container images locally
-docker-build:
-    just compose-gen
-    docker compose build
+# Deploy (or upgrade) the Helm release to the cluster
+helm-deploy:
+    just helm-gen
+    KUBECONFIG=~/.kube/factory-sim.yaml helm upgrade --install factory-sim ./helm/factory-sim \
+        -f helm/factory-sim/values.yaml \
+        --set-file plantConfig={{config_dir}}/plant.json
 
-# Start the full stack locally in detached mode
-docker-up:
-    docker compose up -d
+# Uninstall the Helm release (leaves PVCs and ConfigMaps intact)
+helm-uninstall:
+    KUBECONFIG=~/.kube/factory-sim.yaml helm uninstall factory-sim
 
-# Stop and remove containers (volumes preserved)
-docker-down:
-    docker compose down
+# ── k3s cluster setup (run once) ──────────────────────────────────────────────
 
-# Stream logs for a service.  Usage: just docker-logs backend
-docker-logs SVC:
-    docker compose logs -f {{SVC}}
-
-# Build, push all images to GHCR.  Requires: gh auth login + write:packages scope
-push:
-    just compose-gen
-    gh auth token | docker login ghcr.io -u jakubklas --password-stdin
-    docker compose build
-    docker compose push
-
-# ── Deploy ────────────────────────────────────────────────────────────────────
-
-# Bootstrap a fresh Linux host and start the stack.  Usage: just deploy 1.2.3.4
-# Override SSH key/user: DEPLOY_KEY=~/.ssh/other.pem DEPLOY_USER=ubuntu just deploy 1.2.3.4
-deploy HOST:
-    ssh -i {{deploy_key}} -o StrictHostKeyChecking=no {{deploy_user}}@{{HOST}} 'bash -s' \
-        < {{justfile_directory()}}/deploy/bootstrap.sh
-
-# Pull latest images and restart the stack on a running host.  Usage: just redeploy 1.2.3.4
-redeploy HOST:
-    ssh -i {{deploy_key}} -o StrictHostKeyChecking=no {{deploy_user}}@{{HOST}} \
-        'cd ~/factory_sim && git pull --ff-only && sudo docker compose pull && sudo docker compose up -d'
-
-# Stream live logs from a deployed host.  Usage: just remote-logs 1.2.3.4
-remote-logs HOST:
-    ssh -i {{deploy_key}} -o StrictHostKeyChecking=no {{deploy_user}}@{{HOST}} \
-        'cd ~/factory_sim && sudo docker compose logs -f'
-
-# ── Device management ─────────────────────────────────────────────────────
-
-# Bootstrap a fresh device and start its services.  Usage: just deploy-device pi
-deploy-device DEVICE:
+# Install k3s server on EC2 — uses Tailscale as the cluster network interface.
+# Prerequisites: Tailscale must be running on EC2 (tailscale0 interface present).
+k3s-server-install:
     #!/bin/bash
     set -euo pipefail
-
-    DEVICE_DATA=$(jq -r '.devices.{{DEVICE}}' {{justfile_directory()}}/deploy/inventory.json)
+    DEVICE_DATA=$(jq -r '.devices.ec2' {{justfile_directory()}}/deploy/inventory.json)
     HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
     ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
     PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
@@ -87,92 +54,104 @@ deploy-device DEVICE:
     SSH_KEY=$(echo "$CREDS" | jq -r '.ssh_key')
     SSH_USER=$(echo "$CREDS" | jq -r '.ssh_user')
 
-    echo "Bootstrapping {{DEVICE}} ($SSH_USER@$HOST)"
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
-        "DEPLOY_DEVICE={{DEVICE}} bash -s" \
-        < {{justfile_directory()}}/deploy/bootstrap.sh
+    echo "Installing k3s server on EC2 ($SSH_USER@$HOST)..."
+    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" '
+        TAILSCALE_IP=$(tailscale ip -4)
+        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="
+            --node-ip=$TAILSCALE_IP
+            --advertise-address=$TAILSCALE_IP
+            --bind-address=$TAILSCALE_IP
+            --flannel-iface=tailscale0
+            --disable=traefik
+        " sh -
+        echo "k3s server installed. Node IP: $TAILSCALE_IP"
+        NODE=$(sudo k3s kubectl get nodes -o jsonpath='"'"'{.items[0].metadata.name}'"'"')
+        sudo k3s kubectl label node "$NODE" deploy_target=ec2 --overwrite
+        echo "Node $NODE labeled deploy_target=ec2"
+    '
+    echo "Done. Run 'just add-device <name>' to join additional nodes."
 
-# Pull latest images and restart a running device.  Usage: just redeploy-device ec2
-redeploy-device DEVICE:
+# Add any new device to the k3s cluster, wait for it to be Ready, and label it.
+# Prerequisites: entry in deploy/inventory.json + credentials file, Tailscale running on the device.
+# Usage: just add-device pi2
+add-device DEVICE:
     #!/bin/bash
     set -euo pipefail
+
+    EC2_DATA=$(jq -r '.devices.ec2' {{justfile_directory()}}/deploy/inventory.json)
+    EC2_HOST=$(echo "$EC2_DATA" | jq -r '.host')
+    EC2_ENV=$(echo "$EC2_DATA" | jq -r '.environment')
+    EC2_PROFILE=$(echo "$EC2_DATA" | jq -r '.credential_profile')
+    EC2_CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$EC2_ENV"/"$EC2_PROFILE".json)
+    EC2_KEY=$(echo "$EC2_CREDS" | jq -r '.ssh_key')
+    EC2_USER=$(echo "$EC2_CREDS" | jq -r '.ssh_user')
 
     DEVICE_DATA=$(jq -r '.devices.{{DEVICE}}' {{justfile_directory()}}/deploy/inventory.json)
-    HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
-    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
-    PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
-    CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$ENV"/"$PROFILE".json)
-    SSH_KEY=$(echo "$CREDS" | jq -r '.ssh_key')
-    SSH_USER=$(echo "$CREDS" | jq -r '.ssh_user')
+    DEVICE_HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
+    DEVICE_ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
+    DEVICE_PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
+    DEVICE_CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$DEVICE_ENV"/"$DEVICE_PROFILE".json)
+    DEVICE_KEY=$(echo "$DEVICE_CREDS" | jq -r '.ssh_key')
+    DEVICE_USER=$(echo "$DEVICE_CREDS" | jq -r '.ssh_user')
 
-    echo "Redeploying to {{DEVICE}} ($SSH_USER@$HOST)"
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
-        "cd ~/factory_sim && git pull --ff-only && sudo docker compose -f docker-compose.{{DEVICE}}.yml pull && sudo docker compose -f docker-compose.{{DEVICE}}.yml up -d"
+    echo "Fetching join token from EC2..."
+    TOKEN=$(ssh -i "$EC2_KEY" -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" \
+        'sudo cat /var/lib/rancher/k3s/server/node-token')
 
-# Stream logs from a specific device.  Usage: just logs-device pi
-logs-device DEVICE:
-    #!/bin/bash
-    set -euo pipefail
+    DEVICE_HOSTNAME=$(ssh -i "$DEVICE_KEY" -o StrictHostKeyChecking=no "$DEVICE_USER@$DEVICE_HOST" 'hostname -s')
 
-    DEVICE_DATA=$(jq -r '.devices.{{DEVICE}}' {{justfile_directory()}}/deploy/inventory.json)
-    HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
-    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
-    PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
-    CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$ENV"/"$PROFILE".json)
-    SSH_KEY=$(echo "$CREDS" | jq -r '.ssh_key')
-    SSH_USER=$(echo "$CREDS" | jq -r '.ssh_user')
+    echo "Installing k3s agent on {{DEVICE}} ($DEVICE_USER@$DEVICE_HOST, node name: $DEVICE_HOSTNAME)..."
+    ssh -i "$DEVICE_KEY" -o StrictHostKeyChecking=no "$DEVICE_USER@$DEVICE_HOST" \
+        "TAILSCALE_IP=\$(tailscale ip -4) && \
+         curl -sfL https://get.k3s.io | \
+             K3S_URL=https://$EC2_HOST:6443 \
+             K3S_TOKEN=$TOKEN \
+             INSTALL_K3S_EXEC=\"--node-ip=\$TAILSCALE_IP --flannel-iface=tailscale0\" \
+             sh -"
 
-    echo "Streaming logs from {{DEVICE}} ($SSH_USER@$HOST)"
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
-        "cd ~/factory_sim && sudo docker compose -f docker-compose.{{DEVICE}}.yml logs -f"
-
-# List all configured devices
-list-devices:
-    jq -r '.devices | to_entries[] | "\(.key): \(.value.name) (\(.value.host)) - \(.value.environment)/\(.value.architecture)"' \
-        {{justfile_directory()}}/deploy/inventory.json
-
-# Deploy all PLCs to their target devices (reads from plant.json)
-deploy-plant:
-    #!/bin/bash
-    set -euo pipefail
-    echo "Deploying PLCs to target devices based on plant.json..."
-    
-    # Get unique deploy targets from plant.json
-    TARGETS=$(jq -r '.plcs[] | select(.deploy_target != "local") | .deploy_target' {{config_dir}}/plant.json | sort -u)
-    
-    for target in $TARGETS; do
-        echo "Deploying to device: $target"
-        just deploy-device "$target"
+    echo "Waiting for $DEVICE_HOSTNAME to be Ready..."
+    export KUBECONFIG=~/.kube/factory-sim.yaml
+    for i in $(seq 1 30); do
+        STATUS=$(kubectl get node "$DEVICE_HOSTNAME" --no-headers 2>/dev/null | awk '{print $2}' || true)
+        [ "$STATUS" = "Ready" ] && break
+        echo "  ($i/30) $STATUS — retrying in 5s..."
+        sleep 5
     done
-    
-    echo "Plant deployment complete!"
 
-# Show PLC to device mapping from plant.json
-show-deployment:
-    jq -r '.plcs[] | "\(.plc_id): \(.name) → \(.deploy_target // "local")"' {{config_dir}}/plant.json
+    kubectl label node "$DEVICE_HOSTNAME" deploy_target={{DEVICE}} --overwrite
+    echo ""
+    echo "✓ {{DEVICE}} joined and labeled. Next:"
+    echo "  1. Edit config/plant.json — set deploy_target for the PLC to '{{DEVICE}}'"
+    echo "  2. just helm-deploy"
 
-# Deploy platform components (backend, frontend) to their target devices
-deploy-platform:
+# Fetch kubeconfig from EC2, replace 127.0.0.1 with Tailscale hostname, save locally.
+# After running this, KUBECONFIG=~/.kube/factory-sim.yaml kubectl get nodes should work.
+k3s-get-kubeconfig:
     #!/bin/bash
     set -euo pipefail
-    echo "Deploying platform components based on platform.json..."
-    
-    # Get unique deploy targets from platform.json
-    TARGETS=$(jq -r '.components[] | .deploy_target' {{justfile_directory()}}/deploy/platform.json | sort -u)
-    
-    for target in $TARGETS; do
-        echo "Deploying platform components to device: $target"
-        just deploy-device "$target"
-    done
-    
-    echo "Platform deployment complete!"
+    DEVICE_DATA=$(jq -r '.devices.ec2' {{justfile_directory()}}/deploy/inventory.json)
+    HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
+    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
+    PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
+    CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$ENV"/"$PROFILE".json)
+    SSH_KEY=$(echo "$CREDS" | jq -r '.ssh_key')
+    SSH_USER=$(echo "$CREDS" | jq -r '.ssh_user')
 
-# Deploy everything: platform + PLCs
-deploy-all:
-    just deploy-platform
-    just deploy-plant
+    mkdir -p ~/.kube
+    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
+        'sudo cat /etc/rancher/k3s/k3s.yaml' \
+        | sed "s|https://127.0.0.1:6443|https://$HOST:6443|g" \
+        > ~/.kube/factory-sim.yaml
+    chmod 600 ~/.kube/factory-sim.yaml
+    echo "Kubeconfig saved → ~/.kube/factory-sim.yaml"
+    echo "Test: KUBECONFIG=~/.kube/factory-sim.yaml kubectl get nodes"
 
-# Show platform component to device mapping
-show-platform:
-    jq -r '.components | to_entries[] | "\(.key): \(.value.description) → \(.value.deploy_target)"' \
-        {{justfile_directory()}}/deploy/platform.json
+# Show node and pod status across the cluster
+k3s-status:
+    KUBECONFIG=~/.kube/factory-sim.yaml kubectl get nodes -o wide
+    @echo ""
+    KUBECONFIG=~/.kube/factory-sim.yaml kubectl get pods -o wide
+
+# Stream logs from a named pod.  Usage: just k3s-logs backend-<hash>
+k3s-logs POD:
+    KUBECONFIG=~/.kube/factory-sim.yaml kubectl logs -f {{POD}}

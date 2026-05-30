@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: plant-config
+  labels:
+    {{- include "factory-sim.labels" . | nindent 4 }}
+data:
+  plant.json: |-
+    {{ .Values.plantConfig | nindent 4 }}

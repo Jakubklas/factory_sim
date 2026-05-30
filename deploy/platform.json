@@ -7,7 +7,7 @@
     },
     "frontend": {
       "deploy_target": "ec2", 
-      "description": "Web UI served from EC2",
+      "description": "Web UI served from a separate server, needs access to backend APIs",
       "ports": ["8080"]
     }
   }

@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: backend
+    {{- include "factory-sim.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      nodeSelector:
+        deploy_target: {{ .Values.backend.deployTarget }}
+      containers:
+      - name: backend
+        image: {{ .Values.registry }}/backend:{{ .Values.imageTag }}
+        env:
+        - name: PLANT_CONFIG
+          value: /config
+        - name: BE_HOST
+          value: "0.0.0.0"
+        - name: BE_PORT
+          value: "{{ .Values.backend.port }}"
+        - name: BE_TICK_MS
+          value: "100"
+        - name: PKI_DIR
+          value: /data/pki
+        ports:
+        - containerPort: {{ .Values.backend.port }}
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: {{ .Values.backend.port }}
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        volumeMounts:
+        - name: config
+          mountPath: /config
+          readOnly: true
+        - name: data
+          mountPath: /data
+      volumes:
+      - name: config
+        configMap:
+          name: plant-config
+      - name: data
+        emptyDir: {}
+---
+# LoadBalancer exposes the backend on the node's external (Tailscale) IP.
+# Browser-side JS fetches BE_URL from the frontend and calls it directly.
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  labels:
+    app: backend
+    {{- include "factory-sim.labels" . | nindent 4 }}
+spec:
+  type: LoadBalancer
+  selector:
+    app: backend
+  ports:
+  - port: {{ .Values.backend.port }}
+    targetPort: {{ .Values.backend.port }}

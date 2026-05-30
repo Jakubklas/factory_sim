@@ -4,7 +4,7 @@
   "description": "Two-PLC water heating demo",
   "plcs": [
     {
-      "plc_id": "plc_001",
+      "plc_id": "plc-001",
       "name": "Heating PLC",
       "simulated": true,
       "protocol": "opcua",
@@ -38,11 +38,11 @@
       ]
     },
     {
-      "plc_id": "plc_002",
+      "plc_id": "plc-002",
       "name": "Bypass PLC",
       "simulated": true,
       "protocol": "opcua",
-      "uri": "opc.tcp://100.101.6.122",
+      "uri": "opc.tcp://pi.tail43d28d.ts.net",
       "port": 4841,
       "endpoint": "/",
       "deploy_target": "pi",

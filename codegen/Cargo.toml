@@ -4,12 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "gen_compose"
-path = "src/bin/gen_compose.rs"
-
-[[bin]]
-name = "gen_compose_device"
-path = "src/bin/gen_compose_device.rs"
+name = "gen_helm_values"
+path = "src/bin/gen_helm_values.rs"
 
 [dependencies]
 plant_config = { path = "../plant_config" }

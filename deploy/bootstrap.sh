@@ -109,21 +109,14 @@ if [ ! -f .env ]; then
     log "Wrote .env"
 fi
 
-# ── Device-specific deployment ──────────────────────────────────────────────
-log "Generating device-specific compose file"
+# ── Select compose file ──────────────────────────────────────────────────────
+# Committed compose files are pulled from the repo — no compilation needed.
 if [ -n "${DEPLOY_DEVICE:-}" ]; then
-    # Generate device-specific docker-compose.yml
-    DEVICE="$DEPLOY_DEVICE" IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io/jakubklas/factory_sim}" \
-        PLANT_CONFIG="$APP_DIR/config" \
-        cargo run -p codegen --bin gen_compose_device > docker-compose.device.yml
-    COMPOSE_FILE="docker-compose.device.yml"
+    COMPOSE_FILE="docker-compose.${DEPLOY_DEVICE}.yml"
 else
-    # Use full compose file
-    IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io/jakubklas/factory_sim}" \
-        PLANT_CONFIG="$APP_DIR/config" \
-        cargo run -p codegen --bin gen_compose > docker-compose.yml
     COMPOSE_FILE="docker-compose.yml"
 fi
+log "Using compose file: $COMPOSE_FILE"
 
 log "Pulling images from registry"
 sudo docker compose -f "$COMPOSE_FILE" pull

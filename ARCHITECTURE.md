@@ -48,8 +48,9 @@ Industrial-twin platform. A simulator emits OPC-UA telemetry indistinguishable f
 │  resolved.rs     ResolvedPlant (merged + valid)   │
 │  loader.rs       JSON → typed structs             │
 │                                                   │
-│  exists because: BE & simulator must agree on     │
-│  what a plant looks like, without sharing state.  │
+│  exists because: BE & simulator parse the same    │
+│  JSON; shared schema keeps types in sync without  │
+│  sharing runtime state.                           │
 └───────────────────────────────────────────────────┘
         ▲                          ▲
         │                          │

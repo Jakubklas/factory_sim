@@ -2,8 +2,7 @@ set dotenv-load
 
 config_dir  := justfile_directory() + "/config"
 deploy_key  := env_var_or_default("DEPLOY_KEY", "~/.ssh/id_ed25519")
-deploy_user := env_var_or_default("DEPLOY_USER", "pi")
-pi_host     := env_var_or_default("PI_HOST", "100.101.6.122")
+deploy_user := env_var_or_default("DEPLOY_USER", "ec2-user")
 registry    := env_var_or_default("IMAGE_REGISTRY", "ghcr.io/jakubklas/factory_sim")
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
@@ -75,73 +74,57 @@ remote-logs HOST:
 
 # ── Device management ─────────────────────────────────────────────────────
 
-# Deploy to a specific device.  Usage: just deploy-device pi
+# Bootstrap a fresh device and start its services.  Usage: just deploy-device pi
 deploy-device DEVICE:
     #!/bin/bash
     set -euo pipefail
-    
-    # Generate device-specific compose file locally
-    echo "Generating compose file for {{DEVICE}}"
-    DEVICE={{DEVICE}} IMAGE_REGISTRY={{registry}} PLANT_CONFIG={{config_dir}} \
-        cargo run -p codegen --bin gen_compose_device > docker-compose.{{DEVICE}}.yml
-    
-    # Load device metadata
+
     DEVICE_DATA=$(jq -r '.devices.{{DEVICE}}' {{justfile_directory()}}/deploy/inventory.json)
     HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
-    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment') 
+    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
     PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
-    
-    # Load credentials
     CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$ENV"/"$PROFILE".json)
     SSH_KEY=$(echo "$CREDS" | jq -r '.ssh_key')
     SSH_USER=$(echo "$CREDS" | jq -r '.ssh_user')
-    
-    echo "Deploying to {{DEVICE}} ($SSH_USER@$HOST)"
-    
-    # Copy device-specific files and deploy
-    scp -i "$SSH_KEY" -o StrictHostKeyChecking=no \
-        docker-compose.{{DEVICE}}.yml "$SSH_USER@$HOST":~/factory_sim/docker-compose.yml
-    
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
-        'cd ~/factory_sim && sudo docker compose build && sudo docker compose up -d'
 
-# Redeploy to a specific device.  Usage: just redeploy-device ec2
+    echo "Bootstrapping {{DEVICE}} ($SSH_USER@$HOST)"
+    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
+        "DEPLOY_DEVICE={{DEVICE}} bash -s" \
+        < {{justfile_directory()}}/deploy/bootstrap.sh
+
+# Pull latest images and restart a running device.  Usage: just redeploy-device ec2
 redeploy-device DEVICE:
     #!/bin/bash
     set -euo pipefail
-    
-    # Load device metadata and credentials
+
     DEVICE_DATA=$(jq -r '.devices.{{DEVICE}}' {{justfile_directory()}}/deploy/inventory.json)
     HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
-    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment') 
+    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
     PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
-    
     CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$ENV"/"$PROFILE".json)
     SSH_KEY=$(echo "$CREDS" | jq -r '.ssh_key')
     SSH_USER=$(echo "$CREDS" | jq -r '.ssh_user')
-    
+
     echo "Redeploying to {{DEVICE}} ($SSH_USER@$HOST)"
     ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
-        'cd ~/factory_sim && git pull --ff-only && sudo docker compose pull && sudo docker compose up -d'
+        "cd ~/factory_sim && git pull --ff-only && sudo docker compose -f docker-compose.{{DEVICE}}.yml pull && sudo docker compose -f docker-compose.{{DEVICE}}.yml up -d"
 
 # Stream logs from a specific device.  Usage: just logs-device pi
 logs-device DEVICE:
     #!/bin/bash
     set -euo pipefail
-    
-    # Load device metadata and credentials
+
     DEVICE_DATA=$(jq -r '.devices.{{DEVICE}}' {{justfile_directory()}}/deploy/inventory.json)
     HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
-    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment') 
+    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
     PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
-    
     CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$ENV"/"$PROFILE".json)
     SSH_KEY=$(echo "$CREDS" | jq -r '.ssh_key')
     SSH_USER=$(echo "$CREDS" | jq -r '.ssh_user')
-    
+
     echo "Streaming logs from {{DEVICE}} ($SSH_USER@$HOST)"
     ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
-        'cd ~/factory_sim && sudo docker compose logs -f'
+        "cd ~/factory_sim && sudo docker compose -f docker-compose.{{DEVICE}}.yml logs -f"
 
 # List all configured devices
 list-devices:

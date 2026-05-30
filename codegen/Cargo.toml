@@ -7,5 +7,10 @@ edition = "2021"
 name = "gen_compose"
 path = "src/bin/gen_compose.rs"
 
+[[bin]]
+name = "gen_compose_device"
+path = "src/bin/gen_compose_device.rs"
+
 [dependencies]
 plant_config = { path = "../plant_config" }
+serde_json = "1.0"

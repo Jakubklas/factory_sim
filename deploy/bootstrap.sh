@@ -100,19 +100,36 @@ if [ ! -f .env ]; then
     if [ -z "$PUBLIC_IP" ]; then
         PUBLIC_IP=$(curl -sf --max-time 2 \
             http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null \
-            || hostname -I | awk '{print $1}')
+            || hostname -I | awk '{print $1}' || echo "localhost")
     fi
-    log "Public IP: ${PUBLIC_IP}"
-    echo "BE_URL=http://${PUBLIC_IP}:3001" > .env
+    # Set PUBLIC_IP with fallback
+    PUBLIC_IP="${PUBLIC_IP:-localhost}"
+    log "Public IP: $PUBLIC_IP"
+    echo "BE_URL=http://$PUBLIC_IP:3001" > .env
     log "Wrote .env"
 fi
 
-# ── Pull + start ──────────────────────────────────────────────────────────────
+# ── Device-specific deployment ──────────────────────────────────────────────
+log "Generating device-specific compose file"
+if [ -n "${DEPLOY_DEVICE:-}" ]; then
+    # Generate device-specific docker-compose.yml
+    DEVICE="$DEPLOY_DEVICE" IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io/jakubklas/factory_sim}" \
+        PLANT_CONFIG="$APP_DIR/config" \
+        cargo run -p codegen --bin gen_compose_device > docker-compose.device.yml
+    COMPOSE_FILE="docker-compose.device.yml"
+else
+    # Use full compose file
+    IMAGE_REGISTRY="${IMAGE_REGISTRY:-ghcr.io/jakubklas/factory_sim}" \
+        PLANT_CONFIG="$APP_DIR/config" \
+        cargo run -p codegen --bin gen_compose > docker-compose.yml
+    COMPOSE_FILE="docker-compose.yml"
+fi
+
 log "Pulling images from registry"
-sudo docker compose pull
+sudo docker compose -f "$COMPOSE_FILE" pull
 
 log "Starting stack"
-sudo docker compose up -d
+sudo docker compose -f "$COMPOSE_FILE" up -d
 
 log "Stack is up:"
-sudo docker compose ps
+sudo docker compose -f "$COMPOSE_FILE" ps

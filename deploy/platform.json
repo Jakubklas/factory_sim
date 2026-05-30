@@ -1,0 +1,14 @@
+{
+  "components": {
+    "backend": {
+      "deploy_target": "ec2",
+      "description": "API + connectors, needs access to all PLCs",
+      "ports": ["3001"]
+    },
+    "frontend": {
+      "deploy_target": "ec2", 
+      "description": "Web UI served from EC2",
+      "ports": ["8080"]
+    }
+  }
+}

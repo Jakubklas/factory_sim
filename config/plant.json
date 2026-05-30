@@ -10,6 +10,7 @@
       "protocol": "opcua",
       "port": 4840,
       "endpoint": "/",
+      "deploy_target": "ec2",
       "devices": [
         {
           "device_id": "boiler_001",
@@ -56,6 +57,7 @@
       "protocol": "opcua",
       "port": 4841,
       "endpoint": "/",
+      "deploy_target": "pi",
       "devices": [
         {
           "device_id": "flow_meter_002",

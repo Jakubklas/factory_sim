@@ -1,0 +1,18 @@
+{
+  "devices": {
+    "ec2": {
+      "name": "AWS EC2 Instance",
+      "host": "100.89.31.46",
+      "description": "Primary cloud deployment via Tailscale",
+      "environment": "aws",
+      "credential_profile": "ec2"
+    },
+    "pi": {
+      "name": "Raspberry Pi",
+      "host": "100.101.6.122", 
+      "description": "Edge device via Tailscale",
+      "environment": "edge",
+      "credential_profile": "pi"
+    }
+  }
+}

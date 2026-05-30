@@ -218,6 +218,7 @@ name = "codegen"
 version = "0.1.0"
 dependencies = [
  "plant_config",
+ "serde_json",
 ]
 
 [[package]]

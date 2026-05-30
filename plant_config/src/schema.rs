@@ -66,6 +66,9 @@ pub struct PlcConfig {
     pub uri:       Option<String>,
     pub port:      u16,
     pub endpoint:  String,
+    /// Which device/environment this PLC should be deployed to. "local" means current machine.
+    #[serde(default)]
+    pub deploy_target: Option<String>,
     pub devices:   Vec<DeviceConfig>,
 }
 

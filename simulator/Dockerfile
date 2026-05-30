@@ -9,7 +9,7 @@ WORKDIR /build
 # Cross-linker for arm64. OpenSSL is vendored (compiled from source) so no
 # target sysroot headers are needed — pkg-config only sees the host arch.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config gcc-aarch64-linux-gnu perl make && \
+    pkg-config gcc-aarch64-linux-gnu libc6-dev-arm64-cross perl make && \
     rm -rf /var/lib/apt/lists/*
 
 # Resolve Rust target triple and add it.

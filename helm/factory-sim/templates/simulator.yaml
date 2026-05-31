@@ -35,6 +35,15 @@ spec:
           value: /data/pki
         ports:
         - containerPort: {{ .port }}
+        - containerPort: 9000
+          name: health
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 9000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          failureThreshold: 3
         volumeMounts:
         - name: config
           mountPath: /config
@@ -46,7 +55,22 @@ spec:
         configMap:
           name: plant-config
       - name: data
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: {{ .id }}-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .id }}-data
+  labels:
+    app: {{ .id }}
+    {{- include "factory-sim.labels" $ | nindent 4 }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
 ---
 apiVersion: v1
 kind: Service

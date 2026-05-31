@@ -243,16 +243,18 @@ Each binary is a leaf process: one config-volume input, one network port output.
 ┌─ pod: simulator ────────────────┐   ┌─ pod: backend ────────────────┐
 │  (one per simulated PLC)        │   │                               │
 │  /config  ◄─── ConfigMap (ro)   │   │  /config  ◄─── ConfigMap (ro) │
-│  /data    ◄─── emptyDir  (rw)   │   │  /data    ◄─── emptyDir  (rw) │
+│  /data    ◄─── PVC       (rw)   │   │  /data    ◄─── PVC       (rw) │
 │                                 │   │                               │
 │  env: PLANT_CONFIG=/config      │   │  env: PLANT_CONFIG=/config    │
 │       SIM_PLC_ID=plc-xxx        │   │       BE_HOST=0.0.0.0         │
 │       SIM_TICK_MS=100           │   │       BE_PORT=3001            │
 │       OPCUA_HOST=plc-xxx        │   │       BE_TICK_MS=100          │
 │       PKI_DIR=/data/pki         │   │       PKI_DIR=/data/pki       │
+│       SIM_HEALTH_PORT=9000      │   │                               │
 │                                 │   │                               │
 │  expose: <plc.port> (OPC-UA)    │   │  expose: 3001 (HTTP + WS)     │
-└─────────────────────────────────┘   └───────────────────────────────┘
+│           9000      (health)    │   └───────────────────────────────┘
+└─────────────────────────────────┘
 
 ┌─ pod: frontend ─────────────────┐
 │  nginx:alpine + built SPA       │
@@ -350,6 +352,7 @@ just helm-deploy         # scheduler places the pod on pi2
 | `PLANT_CONFIG`       | both      | Path to directory holding `plant.json` + `device_types.json`         |
 | `SIM_PLC_ID`         | simulator | Which PLC this process owns (required)                               |
 | `SIM_TICK_MS`        | simulator | Physics tick cadence (default 100)                                   |
+| `SIM_HEALTH_PORT`    | simulator | HTTP health endpoint port (default 9000)                             |
 | `OPCUA_HOST`         | simulator | Hostname advertised in OPC-UA discovery URLs                         |
 | `PKI_DIR`            | both      | Where the OPC-UA crate writes its auto-generated keypair             |
 | `BE_HOST/PORT/TICK_MS` | backend | WS+HTTP bind address + tick rate                                     |
@@ -357,7 +360,9 @@ just helm-deploy         # scheduler places the pod on pi2
 
 ---
 
-## Backend API surface
+## API surface
+
+### Backend (`BE_PORT`, default 3001)
 
 | Endpoint                | Method | Returns                                  |
 |-------------------------|--------|------------------------------------------|
@@ -365,6 +370,12 @@ just helm-deploy         # scheduler places the pod on pi2
 | `/api/plant`            | GET    | `PlantConfig` — static topology         |
 | `/api/log-level?set=…`  | GET    | reload tracing filter at runtime         |
 | `/health`               | GET    | `{"status":"ok"}` — liveness probe      |
+
+### Simulator (`SIM_HEALTH_PORT`, default 9000)
+
+| Endpoint   | Method | Returns                             |
+|------------|--------|-------------------------------------|
+| `/health`  | GET    | `{"status":"ok"}` — liveness probe |
 
 ---
 
@@ -380,3 +391,8 @@ Things that are fine and worth not re-debating:
 
 - Full `IngestedState` cloned per WS frame — small, JSON-serialisable, no measurable cost.
 - `RwLock` instead of `watch`/channels for state — straightforward, no contention at tick-ms cadence.
+
+Recently fixed:
+
+- **Simulator `/health` endpoint** — each simulator now exposes `GET /health` on port 9000 (axum, separate from the OPC-UA port); k3s liveness probe wired in the Helm template.
+- **PVC for PKI data** — both simulator and backend pods use a `PersistentVolumeClaim` for `/data` instead of `emptyDir`; OPC-UA keypairs survive pod restarts, eliminating cert-churn backoff storms.

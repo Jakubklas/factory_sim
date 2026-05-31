@@ -12,6 +12,7 @@ plant_config = { path = "../plant_config" }
 opcua = { version = "0.12", features = ["server"] }
 openssl = { version = "0.10", features = ["vendored"] }
 tokio = { version = "1.41", features = ["full"] }
+axum = "0.7"
 rhai = { version = "1", features = ["sync"] }
 rand = "0.8"
 tracing = "0.1"

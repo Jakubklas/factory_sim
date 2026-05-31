@@ -9,6 +9,7 @@ mod physics_definitions;
 mod functions;
 mod tick;
 mod server;
+mod health;
 
 use state::SimulatorState;
 use physics_definitions::PhysicsEngine;
@@ -81,6 +82,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
     }
+
+    // Health endpoint for k8s liveness probes — runs on SIM_HEALTH_PORT (default 9000)
+    let health_port: u16 = std::env::var("SIM_HEALTH_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(9000);
+    health::start(health_port);
 
     // Start the OPC-UA server for this process's PLC
     server::plc_server::start_one(

@@ -7,3 +7,5 @@ metadata:
 data:
   plant.json: |-
     {{ .Values.plantConfig | nindent 4 }}
+  device_types.json: |-
+    {{ .Values.deviceTypesConfig | nindent 4 }}

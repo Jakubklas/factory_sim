@@ -50,7 +50,22 @@ spec:
         configMap:
           name: plant-config
       - name: data
-        emptyDir: {}
+        persistentVolumeClaim:
+          claimName: backend-data
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: backend-data
+  labels:
+    app: backend
+    {{- include "factory-sim.labels" . | nindent 4 }}
+spec:
+  accessModes:
+  - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Mi
 ---
 # LoadBalancer exposes the backend on the node's external (Tailscale) IP.
 # Browser-side JS fetches BE_URL from the frontend and calls it directly.

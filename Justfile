@@ -33,7 +33,8 @@ helm-deploy:
     just helm-gen
     KUBECONFIG=~/.kube/factory-sim.yaml helm upgrade --install factory-sim ./helm/factory-sim \
         -f helm/factory-sim/values.yaml \
-        --set-file plantConfig={{config_dir}}/plant.json
+        --set-file plantConfig={{config_dir}}/plant.json \
+        --set-file deviceTypesConfig={{config_dir}}/device_types.json
 
 # Uninstall the Helm release (leaves PVCs and ConfigMaps intact)
 helm-uninstall:
@@ -73,27 +74,11 @@ k3s-server-install:
     set -euo pipefail
     DEVICE_DATA=$(jq -r '.devices.ec2' {{justfile_directory()}}/deploy/inventory.json)
     HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
-    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
-    PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
-    CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$ENV"/"$PROFILE".json)
-    SSH_KEY=$(echo "$CREDS" | jq -r '.ssh_key')
-    SSH_USER=$(echo "$CREDS" | jq -r '.ssh_user')
+    SSH_USER=$(echo "$DEVICE_DATA" | jq -r '.ssh_user // "ec2-user"')
 
-    echo "Installing k3s server on EC2 ($SSH_USER@$HOST)..."
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" '
-        TAILSCALE_IP=$(tailscale ip -4)
-        curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="
-            --node-ip=$TAILSCALE_IP
-            --advertise-address=$TAILSCALE_IP
-            --bind-address=$TAILSCALE_IP
-            --flannel-iface=tailscale0
-            --disable=traefik
-        " sh -
-        echo "k3s server installed. Node IP: $TAILSCALE_IP"
-        NODE=$(sudo k3s kubectl get nodes -o jsonpath='"'"'{.items[0].metadata.name}'"'"')
-        sudo k3s kubectl label node "$NODE" deploy_target=ec2 --overwrite
-        echo "Node $NODE labeled deploy_target=ec2"
-    '
+    echo "Provisioning k3s server on EC2 ($SSH_USER@$HOST via Tailscale SSH)..."
+    tailscale ssh "$SSH_USER@$HOST" "bash -s -- --role k3s-server" \
+        < {{justfile_directory()}}/deploy/provision.sh
     echo "Done. Run 'just add-device <name>' to join additional nodes."
 
 # Add any new device to the k3s cluster, wait for it to be Ready, and label it.
@@ -105,28 +90,19 @@ add-device DEVICE:
 
     EC2_DATA=$(jq -r '.devices.ec2' {{justfile_directory()}}/deploy/inventory.json)
     EC2_HOST=$(echo "$EC2_DATA" | jq -r '.host')
-    EC2_ENV=$(echo "$EC2_DATA" | jq -r '.environment')
-    EC2_PROFILE=$(echo "$EC2_DATA" | jq -r '.credential_profile')
-    EC2_CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$EC2_ENV"/"$EC2_PROFILE".json)
-    EC2_KEY=$(echo "$EC2_CREDS" | jq -r '.ssh_key')
-    EC2_USER=$(echo "$EC2_CREDS" | jq -r '.ssh_user')
+    EC2_USER=$(echo "$EC2_DATA" | jq -r '.ssh_user // "ec2-user"')
 
     DEVICE_DATA=$(jq -r '.devices.{{DEVICE}}' {{justfile_directory()}}/deploy/inventory.json)
     DEVICE_HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
-    DEVICE_ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
-    DEVICE_PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
-    DEVICE_CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$DEVICE_ENV"/"$DEVICE_PROFILE".json)
-    DEVICE_KEY=$(echo "$DEVICE_CREDS" | jq -r '.ssh_key')
-    DEVICE_USER=$(echo "$DEVICE_CREDS" | jq -r '.ssh_user')
+    DEVICE_USER=$(echo "$DEVICE_DATA" | jq -r '.ssh_user // "pi"')
 
-    echo "Fetching join token from EC2..."
-    TOKEN=$(ssh -i "$EC2_KEY" -o StrictHostKeyChecking=no "$EC2_USER@$EC2_HOST" \
-        'sudo cat /var/lib/rancher/k3s/server/node-token')
+    echo "Fetching join token from EC2 (via Tailscale SSH)..."
+    TOKEN=$(tailscale ssh "$EC2_USER@$EC2_HOST" 'sudo cat /var/lib/rancher/k3s/server/node-token')
 
-    DEVICE_HOSTNAME=$(ssh -i "$DEVICE_KEY" -o StrictHostKeyChecking=no "$DEVICE_USER@$DEVICE_HOST" 'hostname -s')
+    DEVICE_HOSTNAME=$(tailscale ssh "$DEVICE_USER@$DEVICE_HOST" 'hostname -s')
 
-    echo "Installing k3s agent on {{DEVICE}} ($DEVICE_USER@$DEVICE_HOST, node name: $DEVICE_HOSTNAME)..."
-    ssh -i "$DEVICE_KEY" -o StrictHostKeyChecking=no "$DEVICE_USER@$DEVICE_HOST" \
+    echo "Installing k3s agent on {{DEVICE}} ($DEVICE_USER@$DEVICE_HOST, node: $DEVICE_HOSTNAME)..."
+    tailscale ssh "$DEVICE_USER@$DEVICE_HOST" \
         "TAILSCALE_IP=\$(tailscale ip -4) && \
          curl -sfL https://get.k3s.io | \
              K3S_URL=https://$EC2_HOST:6443 \
@@ -156,15 +132,10 @@ k3s-get-kubeconfig:
     set -euo pipefail
     DEVICE_DATA=$(jq -r '.devices.ec2' {{justfile_directory()}}/deploy/inventory.json)
     HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
-    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
-    PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
-    CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$ENV"/"$PROFILE".json)
-    SSH_KEY=$(echo "$CREDS" | jq -r '.ssh_key')
-    SSH_USER=$(echo "$CREDS" | jq -r '.ssh_user')
+    SSH_USER=$(echo "$DEVICE_DATA" | jq -r '.ssh_user // "ec2-user"')
 
     mkdir -p ~/.kube
-    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
-        'sudo cat /etc/rancher/k3s/k3s.yaml' \
+    tailscale ssh "$SSH_USER@$HOST" 'sudo cat /etc/rancher/k3s/k3s.yaml' \
         | sed "s|https://127.0.0.1:6443|https://$HOST:6443|g" \
         > ~/.kube/factory-sim.yaml
     chmod 600 ~/.kube/factory-sim.yaml

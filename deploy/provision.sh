@@ -76,6 +76,15 @@ install_tailscale() {
   echo "  → Next: sudo tailscale up --hostname=<name>"
 }
 
+enable_tailscale_ssh() {
+  log "Tailscale SSH"
+  # Enables SSH via Tailscale identity — no authorized_keys management needed for future devices.
+  # --accept-risk=lose-ssh is safe here: provision runs non-interactively so losing the
+  # connection just means the command completes; nothing important is interrupted.
+  sudo tailscale set --ssh --accept-risk=lose-ssh
+  echo "  Any tailnet node can now ssh into this machine without key management"
+}
+
 install_just() {
   if command -v just &>/dev/null; then echo "  just already installed"; return; fi
   log "just (task runner)"
@@ -149,6 +158,19 @@ install_cross_toolchain() {
   fi
 }
 
+install_helm() {
+  if command -v helm &>/dev/null; then echo "  helm already installed"; return; fi
+  log "Helm"
+  curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+}
+
+install_k9s() {
+  if command -v k9s &>/dev/null; then echo "  k9s already installed"; return; fi
+  log "k9s (Kubernetes TUI)"
+  curl -sL https://github.com/derailed/k9s/releases/latest/download/k9s_Linux_amd64.tar.gz \
+    | sudo tar -xz -C /usr/local/bin k9s
+}
+
 install_k3s_server() {
   if command -v k3s &>/dev/null; then echo "  k3s already installed"; return; fi
   log "k3s server"
@@ -163,9 +185,36 @@ install_k3s_server() {
     --flannel-iface=tailscale0
     --disable=traefik
   " sh -
-  NODE=$(sudo k3s kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+  echo "  Waiting for node to be Ready..."
+  for i in $(seq 1 30); do
+    NODE=$(sudo k3s kubectl get nodes -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    STATUS=$(sudo k3s kubectl get nodes --no-headers 2>/dev/null | awk '{print $2}' | head -1 || true)
+    [[ "$STATUS" == "Ready" ]] && break
+    echo "  ($i/30) ${STATUS:-waiting} — retrying in 3s..."
+    sleep 3
+  done
   sudo k3s kubectl label node "$NODE" deploy_target=ec2 --overwrite
   echo "  → Join token: sudo cat /var/lib/rancher/k3s/server/node-token"
+}
+
+setup_kubectl_and_kubeconfig() {
+  log "kubectl symlink + kubeconfig"
+  # Symlink k3s kubectl as kubectl so standard tooling works
+  if ! command -v kubectl &>/dev/null; then
+    sudo ln -sf /usr/local/bin/k3s /usr/local/bin/kubectl
+    echo "  kubectl → /usr/local/bin/k3s"
+  else
+    echo "  kubectl already in PATH"
+  fi
+
+  # Write user kubeconfig pointing at the Tailscale IP (survives reboots/IP changes)
+  mkdir -p "$HOME/.kube"
+  TAILSCALE_IP=$(tailscale ip -4)
+  sudo cat /etc/rancher/k3s/k3s.yaml \
+    | sed "s|https://127.0.0.1:6443|https://$TAILSCALE_IP:6443|g" \
+    > "$HOME/.kube/factory-sim.yaml"
+  chmod 600 "$HOME/.kube/factory-sim.yaml"
+  echo "  kubeconfig → ~/.kube/factory-sim.yaml (server: $TAILSCALE_IP:6443)"
 }
 
 install_k3s_agent() {
@@ -190,7 +239,10 @@ case "$ROLE" in
   workstation)
     install_base
     install_tailscale
+    enable_tailscale_ssh
     install_just
+    install_helm
+    install_k9s
     install_rust
     install_node
     install_claude
@@ -198,17 +250,22 @@ case "$ROLE" in
   k3s-server)
     install_base
     install_tailscale
+    enable_tailscale_ssh
     install_just
+    install_helm
     install_k3s_server
+    setup_kubectl_and_kubeconfig
     ;;
   k3s-agent)
     install_base
     install_tailscale
+    enable_tailscale_ssh
     install_k3s_agent
     ;;
   build)
     install_base
     install_tailscale
+    enable_tailscale_ssh
     install_just
     install_rust
     install_docker
@@ -228,10 +285,12 @@ echo ""
 _v() { command -v "$1" &>/dev/null && echo "  $1: $($2)" || true; }
 _v git        "git --version"
 _v just       "just --version"
+_v helm       "helm version --short"
 _v cargo      "cargo --version"
 _v node       "node --version"
 _v claude     "claude --version"
 _v docker     "docker --version"
 _v k3s        "k3s --version | head -1"
+_v kubectl    "kubectl version --client --short 2>/dev/null || kubectl version --client"
 _v tailscale  "tailscale --version | head -1"
 echo ""

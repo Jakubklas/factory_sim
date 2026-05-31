@@ -20,4 +20,4 @@ backend:
 
 frontend:
   deployTarget: ec2
-  beUrl: "https://factory-sim-ec2.tail43d28d.ts.net"
+  beUrl: "https://factory-sim-ec2.tail43d28d.ts.net:8443"

@@ -36,6 +36,9 @@ helm-deploy:
         --set-file plantConfig={{config_dir}}/plant.json \
         --set-file deviceTypesConfig={{config_dir}}/device_types.json \
         --set-file nginxConfig=frontend/docker/nginx.conf
+    KUBECONFIG=~/.kube/factory-sim.yaml kubectl rollout restart deployment
+    @echo "Waiting for rollout..."
+    KUBECONFIG=~/.kube/factory-sim.yaml kubectl rollout status deployment --timeout=120s
 
 # Uninstall the Helm release (leaves PVCs and ConfigMaps intact)
 helm-uninstall:

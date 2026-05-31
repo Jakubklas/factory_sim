@@ -20,6 +20,7 @@ spec:
       containers:
       - name: backend
         image: {{ .Values.registry }}/backend:{{ .Values.imageTag }}
+        imagePullPolicy: Always
         env:
         - name: PLANT_CONFIG
           value: /config

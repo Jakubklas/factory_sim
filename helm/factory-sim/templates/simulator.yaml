@@ -22,6 +22,7 @@ spec:
       containers:
       - name: simulator
         image: {{ $.Values.registry }}/simulator:{{ $.Values.imageTag }}
+        imagePullPolicy: Always
         env:
         - name: PLANT_CONFIG
           value: /config

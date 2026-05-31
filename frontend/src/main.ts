@@ -55,7 +55,8 @@ function buildEntry(device: DeviceConfig, position: THREE.Vector3): DeviceEntry 
         },
       };
     }
-    case 'Valve': {
+    case 'Valve':
+    case 'CyclicalValve': {
       const group = createValve(device.device_id, position);
       const label = createLabel(device.device_id, `${device.name}\nInitializing...`);
       group.add(label);

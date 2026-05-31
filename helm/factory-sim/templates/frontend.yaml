@@ -20,6 +20,7 @@ spec:
       containers:
       - name: frontend
         image: {{ .Values.registry }}/frontend:{{ .Values.imageTag }}
+        imagePullPolicy: Always
         env:
         - name: BE_URL
           value: {{ .Values.frontend.beUrl }}

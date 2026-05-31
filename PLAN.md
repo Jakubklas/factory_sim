@@ -101,6 +101,27 @@
 
 ---
 
+## Core product vision: live factory editing ⚠️
+
+> **This is the defining capability that separates this platform from a static dashboard.**
+
+The current model requires a developer with repo access and a running CI pipeline to change anything about the plant — add a device, rewire two sensors, change a physics parameter. That is not how operators work.
+
+The target model: an operator opens the frontend, drags a new flow meter onto the canvas, connects it to an existing valve, sets a flow coefficient, and hits **Run**. The simulation loop for that device starts within seconds, with no deployment, no JSON editing, no `just helm-deploy`.
+
+**What this requires (and does not yet exist):**
+
+- **Shared config DB** — the authoritative plant topology lives in a database (PostgreSQL or SQLite to start), not in `plant.json`. The backend owns the DB and exposes `GET/PUT /api/config` so any frontend or API client can read and modify the topology live.
+- **Hot-reload in the simulator** — the simulator process (or a new coordinator process) watches the config DB for changes and can spin up/tear down the physics tick loop for individual devices without a pod restart. Today the entire process restarts to pick up any config change.
+- **Frontend topology editor** — the 3D canvas becomes writable: drag devices, draw connections, set params, hit Run. The Three.js scene is already device-aware; it needs a write path back to the backend API.
+- **Config bootstrap** — on first boot, the backend seeds the DB from `plant.json` (or a blank schema). After that, `plant.json` is a snapshot/export format, not the source of truth. The ConfigMap and `--set-file` pattern disappears.
+
+**Why this matters beyond convenience:** Without live config, every new customer plant requires a developer to edit JSON files and redeploy. With live config, a non-technical operator can model their own factory, connect real PLCs or simulated ones, and start collecting data — the platform becomes self-service. This is the critical path to a product, not just a prototype.
+
+**What is already in place:** `ResolvedPlant` is built once from config at startup — the architecture already separates "config reading" from "runtime state". The physics engine (Rhai scripts) is already hot-swappable in principle. The `GenericConnector` trait already handles one-connector-per-PLC. The gaps are the write path (no DB, no API mutations) and the hot-reload path (no dynamic device add/remove without restart).
+
+---
+
 ## What is missing but would help
 
 ### Low effort, high immediate impact
@@ -110,7 +131,7 @@
 - **Telemetry persistence** — even SQLite with a `(ts, device_id, field, value REAL)` table in the backend would enable historical queries; QuestDB for production-scale ingestion
 
 ### Architecture-changing (medium term)
-- **Config API** (`GET/PUT /api/config`) — backend seeds its DB from `plant.json` on first boot then serves config over REST; frontend edits topology live; ConfigMap and `--set-file` disappear; already called out in `ARCHITECTURE.md` as the intended path
+- **Config API + live topology DB** (`GET/PUT /api/config`) — the most important capability gap; see "Core product vision: live factory editing" above. Backend seeds a DB from `plant.json` on first boot, exposes config over REST, simulator hot-reloads on change. ConfigMap and `--set-file` disappear. Frontend gains a write path to add/remove/rewire devices without redeployment.
 - **Delta WS updates** — diff previous snapshot and send only changed fields per tick; trivial to implement, essential once device count exceeds ~50; reduces frontend CPU significantly
 - **Dynamic frontend device rendering** — generic `DeviceCard` component driven by `device_types.json` metrics list; new device types added in config only; eliminates the per-device-type `.ts` files
 - **Alarm/threshold engine** — per-metric `min`/`max` bounds in `device_types.json`; backend evaluates on ingest and emits alarm events over WS; frontend shows alert overlay without polling
@@ -132,7 +153,7 @@
 
 ### Short term (1–2 months)
 4. Telemetry persistence — SQLite in backend to start; swap to QuestDB when query volume justifies it
-5. Config API + remove ConfigMap dependency — single most impactful architectural change; unlocks everything that requires live reconfiguration
+5. **Config DB + live topology API** — single most impactful architectural change; the entire "live factory editing" vision (see above) depends on this; unlocks self-service plant modelling without developer involvement
 6. Delta WS encoding — reduces WS payload size significantly as plant grows
 7. Split `plant.json` into topology (physics/wiring) and ops (ports/targets) — different owners, different change cadence
 

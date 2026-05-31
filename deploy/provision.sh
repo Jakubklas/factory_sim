@@ -50,7 +50,7 @@ pkg_update() {
 }
 
 pkg_install() {
-  if is_amazon; then sudo yum install -y "$@"
+  if is_amazon; then sudo yum install -y --allowerasing "$@"
   elif is_debian; then sudo apt-get install -y "$@"
   else echo "Unsupported OS: $OS_ID" >&2; exit 1
   fi

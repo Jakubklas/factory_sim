@@ -34,7 +34,8 @@ helm-deploy:
     KUBECONFIG=~/.kube/factory-sim.yaml helm upgrade --install factory-sim ./helm/factory-sim \
         -f helm/factory-sim/values.yaml \
         --set-file plantConfig={{config_dir}}/plant.json \
-        --set-file deviceTypesConfig={{config_dir}}/device_types.json
+        --set-file deviceTypesConfig={{config_dir}}/device_types.json \
+        --set-file nginxConfig=frontend/docker/nginx.conf
 
 # Uninstall the Helm release (leaves PVCs and ConfigMaps intact)
 helm-uninstall:

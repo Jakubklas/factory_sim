@@ -58,9 +58,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     writeln!(out, "  port: {}", backend_port)?;
     writeln!(out, "  deployTarget: {}", backend_target)?;
     writeln!(out)?;
+    // If a public_url is set (e.g. Tailscale Funnel), the frontend proxies /ws and /api
+    // through nginx to the backend — BE_URL is the frontend's own public origin.
+    // Otherwise fall back to direct backend address.
+    let be_url = platform["components"]["frontend"]["public_url"]
+        .as_str()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("http://{}:{}", backend_host, backend_port));
+
     writeln!(out, "frontend:")?;
     writeln!(out, "  deployTarget: {}", frontend_target)?;
-    writeln!(out, "  beUrl: \"http://{}:{}\"", backend_host, backend_port)?;
+    writeln!(out, "  beUrl: \"{}\"", be_url)?;
 
     print!("{}", out);
     Ok(())

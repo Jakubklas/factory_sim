@@ -46,6 +46,7 @@ function buildEntry(device: DeviceConfig, position: THREE.Vector3): DeviceEntry 
       return {
         deviceId: device.device_id, deviceType: 'Boiler', position, group, label,
         update: (s) => {
+          console.log(`[render] boiler ${device.device_id}: temp=${s.temperature} status=${s.status}`);
           updateBoilerState(group, s.temperature as number, s.target_temperature as number, s.status as string);
           updateLabel(label, formatBoilerLabel(
             device.name, s.temperature as number, s.target_temperature as number,
@@ -61,6 +62,7 @@ function buildEntry(device: DeviceConfig, position: THREE.Vector3): DeviceEntry 
       return {
         deviceId: device.device_id, deviceType: 'Valve', position, group, label,
         update: (s) => {
+          console.log(`[render] valve ${device.device_id}: pos=${s.position} status=${s.status}`);
           updateValveState(group, s.position as number, s.status as string, s.status as string);
           updateLabel(label, formatValveLabel(
             device.name, s.position as number, s.status as string, s.status as string,
@@ -75,6 +77,7 @@ function buildEntry(device: DeviceConfig, position: THREE.Vector3): DeviceEntry 
       return {
         deviceId: device.device_id, deviceType: 'FlowMeter', position, group, label,
         update: (s) => {
+          console.log(`[render] flowmeter ${device.device_id}: flow=${s.flow_rate} status=${s.status}`);
           updateFlowMeterState(group, s.flow_rate as number, s.total_volume as number, s.status as string);
           updateLabel(label, formatFlowMeterLabel(
             device.name, s.flow_rate as number, s.total_volume as number, s.status as string,

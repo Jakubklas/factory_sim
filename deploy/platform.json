@@ -6,9 +6,10 @@
       "ports": ["3001"]
     },
     "frontend": {
-      "deploy_target": "ec2", 
+      "deploy_target": "ec2",
       "description": "Web UI served from a separate server, needs access to backend APIs",
-      "ports": ["8080"]
+      "ports": ["8080"],
+      "public_url": "https://factory-sim-ec2.tail43d28d.ts.net"
     }
   }
 }

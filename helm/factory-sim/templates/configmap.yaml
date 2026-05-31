@@ -9,3 +9,5 @@ data:
     {{ .Values.plantConfig | nindent 4 }}
   device_types.json: |-
     {{ .Values.deviceTypesConfig | nindent 4 }}
+  nginx.conf: |-
+    {{ .Values.nginxConfig | nindent 4 }}

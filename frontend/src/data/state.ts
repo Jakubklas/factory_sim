@@ -11,39 +11,48 @@ export function subscribe(deviceId: string, cb: StateCallback): () => void {
   if (!subscribers.has(deviceId)) subscribers.set(deviceId, new Set());
   subscribers.get(deviceId)!.add(cb);
 
-  // Replay current state immediately if already populated.
   if (devices[deviceId]) cb(devices[deviceId]);
 
   return () => subscribers.get(deviceId)?.delete(cb);
 }
 
 export function connectToBackend(): void {
+  const url = wsUrl();
+  console.log(`[ws] connecting to ${url}`);
   new WsClient({
-    url:     wsUrl(),
-    onFrame: (data) => ingest(JSON.parse(data) as PlantSnapshot),
+    url,
+    onFrame:       (data) => ingest(JSON.parse(data) as PlantSnapshot),
+    onConnect:     () => console.log('[ws] connected'),
+    onDisconnect:  () => console.warn('[ws] disconnected — will retry'),
   }).connect();
 }
 
-let logCounter = 0;
+let frameCount  = 0;
+let changeCount = 0;
+let lastSummary = Date.now();
 
 function ingest(snapshot: PlantSnapshot): void {
-  logCounter++;
-  
+  frameCount++;
+
   for (const [deviceId, fields] of Object.entries(snapshot)) {
     const prev = devices[deviceId];
     devices[deviceId] = fields;
     if (!prev || JSON.stringify(prev) !== JSON.stringify(fields)) {
+      changeCount++;
       subscribers.get(deviceId)?.forEach(cb => cb(fields));
     }
   }
-  
-  // Log every 100 updates (roughly 10 seconds at 100ms tick)
-  if (logCounter >= 100) {
-    logCounter = 0;
-    console.log(`[Frontend] Telemetry update - ${Object.keys(snapshot).length} devices`);
-    const deviceEntries = Object.entries(snapshot).slice(0, 3);
-    for (const [deviceId, fields] of deviceEntries) {
-      console.log(`[Frontend]   ${deviceId}:`, fields);
+
+  // Summary every 30s
+  const now = Date.now();
+  if (now - lastSummary >= 30_000) {
+    const devs = Object.keys(snapshot).length;
+    console.log(`[state] 30s summary — frames: ${frameCount}, changes dispatched: ${changeCount}, devices in snapshot: ${devs}`);
+    for (const [deviceId, fields] of Object.entries(snapshot)) {
+      console.log(`[state]   ${deviceId}:`, fields);
     }
+    frameCount  = 0;
+    changeCount = 0;
+    lastSummary = now;
   }
 }

@@ -118,6 +118,10 @@ impl<C: ConnectorImpl> GenericConnector<C> {
                         self.name, consecutive_failures, delay, e
                     );
                     std::thread::sleep(std::time::Duration::from_secs(delay));
+                    // Drop old connection BEFORE creating the new one — opcua 0.12 uses a shared
+                    // async runtime; dropping Client while a new session is being initialised
+                    // closes the shared sender and kills the new session's background tasks.
+                    drop(conn);
                     conn = self.connect_with_backoff();
                 }
             }

@@ -39,6 +39,31 @@ helm-deploy:
 helm-uninstall:
     KUBECONFIG=~/.kube/factory-sim.yaml helm uninstall factory-sim
 
+# ── Machine provisioning ──────────────────────────────────────────────────────
+
+# Provision a device from inventory.json.  Usage: just provision workstation pi2
+# Roles: workstation | k3s-server | k3s-agent | build
+provision ROLE DEVICE:
+    #!/bin/bash
+    set -euo pipefail
+    DEVICE_DATA=$(jq -r '.devices.{{DEVICE}}' {{justfile_directory()}}/deploy/inventory.json)
+    HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
+    ENV=$(echo "$DEVICE_DATA" | jq -r '.environment')
+    PROFILE=$(echo "$DEVICE_DATA" | jq -r '.credential_profile')
+    CREDS=$(jq -r '.' {{justfile_directory()}}/deploy/credentials/"$ENV"/"$PROFILE".json)
+    SSH_KEY=$(echo "$CREDS" | jq -r '.ssh_key')
+    SSH_USER=$(echo "$CREDS" | jq -r '.ssh_user')
+
+    echo "Provisioning {{ROLE}} on {{DEVICE}} ($SSH_USER@$HOST)..."
+    ssh -A -i "$SSH_KEY" -o StrictHostKeyChecking=no "$SSH_USER@$HOST" \
+        "bash -s -- --role {{ROLE}}" < {{justfile_directory()}}/deploy/provision.sh
+
+# Provision any host by IP/hostname without an inventory entry.
+# Usage: just provision-host workstation 1.2.3.4 ~/.ssh/key.pem ec2-user
+provision-host ROLE HOST KEY USER="ec2-user":
+    ssh -A -i {{KEY}} -o StrictHostKeyChecking=no {{USER}}@{{HOST}} \
+        "bash -s -- --role {{ROLE}}" < {{justfile_directory()}}/deploy/provision.sh
+
 # ── k3s cluster setup (run once) ──────────────────────────────────────────────
 
 # Install k3s server on EC2 — uses Tailscale as the cluster network interface.

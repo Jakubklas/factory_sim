@@ -1,0 +1,6 @@
+apiVersion: v2
+name: keel
+description: Keel — automatic Kubernetes deployment updater for :latest image tags
+type: application
+version: 0.1.0
+appVersion: "latest"

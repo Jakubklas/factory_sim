@@ -229,9 +229,69 @@ The stack spans two physical machines connected by Tailscale. k3s (lightweight K
 
 **Why Tailscale as the cluster network.** Both machines are already on a Tailscale VPN for secure remote access. Using Tailscale as the flannel interface means the cluster network is the VPN — no extra tunnels, no open ports in AWS security groups, and MagicDNS gives stable hostnames that survive IP changes.
 
-**Why two different service types for PLCs.** plc-001 sits on the same node as the backend — ClusterIP is sufficient, CoreDNS resolves `plc-001` to it, no host port wasted. plc-002 is on a separate machine; its `uri` in `plant.json` points to the worker node's MagicDNS hostname, so a LoadBalancer is needed to bind port 4841 on that node's host interface (including `tailscale0`), making it reachable at that address.
+**Why two different service types for PLCs.** A PLC on the same node as the backend needs only a ClusterIP service — CoreDNS resolves the service name, no host port consumed. A PLC on a remote node needs a LoadBalancer service so k3s ServiceLB binds the port on the host's `tailscale0` interface; the backend then connects via that node's MagicDNS hostname (set in `plant.json` as `uri`), which routes over the Tailscale tunnel.
 
 **PLC URI convention.** `PlcConfig.uri` is `Option<String>`. Omit it when the PLC is on the same node as the backend — cluster DNS handles it. Set it explicitly only when the PLC is on a different host: another k3s node (use its MagicDNS hostname) or a real hardware PLC (use its static IP). Never hardcode `localhost` in `plant.json`; use `OPCUA_URI_OVERRIDE=opc.tcp://127.0.0.1` in a local dev `.env` instead.
+
+---
+
+### k3s networking: known gotchas
+
+These were discovered during initial cluster bring-up and are documented so the next operator doesn't spend hours on them.
+
+**CoreDNS cannot resolve `.ts.net` hostnames from inside pods.**
+Pods use CoreDNS (`10.43.0.10`) as their resolver. CoreDNS doesn't forward `.ts.net` queries to the Tailscale MagicDNS server (`100.100.100.100`) because that address is only reachable from the host network, not from the pod network. The fix: add a static `NodeHosts` entry to the CoreDNS ConfigMap for any hostname that pods need to reach by Tailscale name:
+```yaml
+# CoreDNS ConfigMap — kube-system namespace
+NodeHosts: |
+  <tailscale-ip>  <hostname>.tail<tailnet>.ts.net
+```
+This is only needed for cross-node OPC-UA connections where the backend pod must reach a simulator on a remote node by its MagicDNS name.
+
+**nginx `host not found in upstream` on startup.**
+nginx resolves `proxy_pass` upstream hostnames at startup. If the upstream service isn't Ready yet, nginx exits. Fix: use the CoreDNS resolver IP with `resolver 10.43.0.10 valid=10s;` and a `set $upstream` variable so nginx resolves lazily per-request rather than at startup. See [frontend/docker/nginx.conf](frontend/docker/nginx.conf).
+
+**`imagePullPolicy: Always` + `:latest` tag — Helm can't detect image changes.**
+Helm compares manifests, not image digests. Pushing a new `:latest` image while the Deployment spec is unchanged causes Helm to do nothing. The `just helm-deploy` recipe runs `kubectl rollout restart deployment` after every Helm upgrade to force a pull. Keel (see below) handles automatic restarts for pushes that happen outside of `helm-deploy`.
+
+**WebSocket over Tailscale Funnel requires a separate port.**
+Tailscale Funnel proxies HTTPS traffic using HTTP/2. HTTP/2 doesn't support WebSocket upgrade (`101 Switching Protocols`). If the browser reaches the backend over Funnel on port 443, the WS handshake silently fails. Fix: expose the backend on a separate Funnel port (e.g. 8443) — the browser opens a fresh TCP connection to that port, negotiates HTTP/1.1, and the WS upgrade succeeds.
+
+**k3s agent local load balancer (`127.0.0.1:6444`) and resource pressure.**
+The k3s agent on each worker node runs a local load balancer that proxies control-plane traffic from `127.0.0.1:6444` to the server's `6443`. The agent bootstraps by posting certificate signing requests through this LB. If the k3s server node is memory- or I/O-constrained (high swap usage, iowait >50%), the server's API responses exceed the agent's default timeouts and every cert request is logged as "context deadline exceeded". The agent keeps retrying but never completes bootstrap, leaving the node `NotReady`. **Fix: ensure the server node has enough RAM** — k3s server alone consumes ~350 MB; add workload pods and you need at least 2 GB free to avoid swap. Swapping turns 1ms disk ops into 100ms+, which breaks all internal timeouts.
+
+**`deploy_target` label lost after node re-registration.**
+When a worker node leaves and rejoins the cluster (e.g. after a full agent uninstall/reinstall), its custom labels are not preserved — the node object is re-created fresh with only the default k3s labels. Any Deployments with `nodeSelector: deploy_target: <value>` will stay Pending until the label is reapplied:
+```
+kubectl label node <node-name> deploy_target=<value>
+```
+Add this step to the runbook for any worker node rebuild.
+
+**Local-path-provisioner PVC directories are node-local.**
+The default k3s storage class (`local-path`) creates directories under `/var/lib/rancher/k3s/storage/` on whichever node the pod first schedules on. The PV is then pinned to that node via node affinity. If the PVC is created while the target node is `NotReady`, the provisioner's setup job can't run, so the directory is never created even though the PV shows `Bound`. The pod then fails with `MountVolume.NewMounter initialization failed: path does not exist`. Fix: create the directory manually on the target node, or delete the PVC and let it reprovision once the node is Ready.
+
+---
+
+### Cluster management: K9S
+
+K9S is a terminal UI for Kubernetes, pre-installed on the cluster server node by `deploy/provision.sh`. It gives a real-time view of nodes, pods, logs, and resource usage without writing kubectl commands.
+
+```
+k9s   # launch from any shell on the server node (uses the local kubeconfig)
+```
+
+Useful K9S shortcuts:
+- `:nodes` — node health, version, resource pressure
+- `:pods` — all pods across namespaces; shows READY, RESTARTS, AGE
+- `l` on a pod — live log tail
+- `d` on a pod — describe (events, volumes, env, conditions)
+- `ctrl-k` on a pod — delete (triggers Deployment to replace it)
+- `:deployments` — rollout status, desired vs available replicas
+- `?` — full keybind reference
+
+K9S reads from `~/.kube/config` by default. To use it from a developer laptop, point `KUBECONFIG` at the cluster kubeconfig (`~/.kube/factory-sim.yaml`).
+
+---
 
 ---
 
@@ -396,3 +456,5 @@ Recently fixed:
 
 - **Simulator `/health` endpoint** — each simulator now exposes `GET /health` on port 9000 (axum, separate from the OPC-UA port); k3s liveness probe wired in the Helm template.
 - **PVC for PKI data** — both simulator and backend pods use a `PersistentVolumeClaim` for `/data` instead of `emptyDir`; OPC-UA keypairs survive pod restarts, eliminating cert-churn backoff storms.
+- **OPC-UA reconnect loop** — `opcua 0.12` shares an async runtime across `Client` instances; dropping the old `PlcConnection` while creating a new one closed the new session's message sender, causing every reconnect attempt to fail permanently. Fixed by calling `drop(conn)` before `connect_with_backoff()` in `GenericConnector`. The underlying cause (shared runtime in `opcua 0.12`) is tracked as a must-fix; see `PLAN.md` weaknesses.
+- **Keel auto-deploy** — Keel runs in `kube-system` and polls GHCR every 5 minutes; annotated Deployments are restarted automatically when a new `:latest` image is pushed. Eliminates manual `helm-deploy` for image-only changes.

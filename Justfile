@@ -44,6 +44,14 @@ helm-deploy:
 helm-uninstall:
     KUBECONFIG=~/.kube/factory-sim.yaml helm uninstall factory-sim
 
+# Install Keel — watches GHCR every 5m and rolls deployments when image digest changes
+keel-install:
+    KUBECONFIG=~/.kube/factory-sim.yaml helm upgrade --install keel ./helm/keel -n kube-system
+
+# Remove Keel (deployments keep running, just stop auto-updating)
+keel-uninstall:
+    KUBECONFIG=~/.kube/factory-sim.yaml helm uninstall keel -n kube-system
+
 # ── Machine provisioning ──────────────────────────────────────────────────────
 
 # Provision a device from inventory.json.  Usage: just provision workstation pi2

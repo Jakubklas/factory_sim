@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keel
+  namespace: kube-system
+  labels:
+    app: keel
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keel
+  template:
+    metadata:
+      labels:
+        app: keel
+    spec:
+      serviceAccountName: keel
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        effect: NoSchedule
+      containers:
+      - name: keel
+        image: keelhq/keel:latest
+        imagePullPolicy: Always
+        command: ["/bin/keel"]
+        env:
+        - name: POLL
+          value: "true"
+        - name: HELM_PROVIDER
+          value: "false"
+        ports:
+        - containerPort: 9300
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9300
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 100m
+            memory: 128Mi

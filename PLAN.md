@@ -61,7 +61,8 @@
 
 **Protocol layer**
 - OPC-UA polling introduces up to `BE_TICK_MS` stale-data latency; with 10+ PLCs this becomes a bottleneck
-- `opcua 0.12` is old — the OPC-UA server blocks an OS thread per PLC and doesn't compose with tokio; no active async server alternative in pure Rust
+- **`opcua 0.12` shared-runtime bug** ⚠️ — the library wraps an async runtime behind a sync API and shares it across `Client` instances. When a `PlcConnection` is dropped while a new one is being established, the old client's shutdown tears down shared runtime state, closing the new session's message sender and causing every reconnect to fail with `BadSessionIdInvalid` + "Send message will fail because sender has been closed". Workaround: explicitly `drop(conn)` before calling `connect_with_backoff()`. **Real fix: upgrade to an async-native OPC-UA client** (e.g. `open62541` bindings or a future async fork of `opcua`). This is the most operationally disruptive known bug — any OPC-UA session hiccup (pod restart, network blip) triggers an infinite reconnect loop that only resolves with a full pod restart. Tracking this as a **must-fix before production**.
+- `opcua 0.12` is old — the OPC-UA server blocks an OS thread per PLC and doesn't compose with tokio; no async server alternative in pure Rust yet
 - OPC-UA security is disabled (anonymous, no signing/encryption) — fine inside Tailscale, but a single misconfiguration away from exposure
 - `protocol` field on `PlcConfig` is always `"opcua"` — the abstraction is a fiction; `GenericConnector` trait exists but only one impl
 
@@ -144,7 +145,7 @@
 11. ISA-95 hierarchy in plant model (`plant → site → area → line → cell → device`) — aligns with UNS pattern; enables MES/ERP integration and multi-site deployments
 12. Prometheus `/metrics` on backend + Grafana on k3s — observability on the platform itself, not just the simulated plant
 13. JWT auth on API/WS — even a single static token blocks the most obvious abuse
-14. Consider `open62541` Rust bindings as a future replacement for `opcua 0.12` — OPC Foundation–certified, actively maintained, has async Rust support; migrate if the pure-Rust crate stalls
+14. **Upgrade OPC-UA client from `opcua 0.12` to async-native** ⚠️ — `open62541` Rust bindings are OPC Foundation–certified and actively maintained; alternatively wait for an async fork of the pure-Rust crate. The shared-runtime bug (see Protocol layer weakness above) makes this a must-fix before production, not a nice-to-have. Workaround (`drop(conn)` before reconnect) is in place but does not fix the underlying architecture.
 
 ### What to avoid
 - Don't adopt EdgeX Foundry — it replaces most of what you've built; only viable if starting from scratch on a heterogeneous device fleet

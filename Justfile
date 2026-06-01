@@ -39,6 +39,7 @@ helm-deploy:
     KUBECONFIG=~/.kube/factory-sim.yaml kubectl rollout restart deployment
     @echo "Waiting for rollout..."
     KUBECONFIG=~/.kube/factory-sim.yaml kubectl rollout status deployment --timeout=120s
+    just funnel-setup
 
 # Uninstall the Helm release (leaves PVCs and ConfigMaps intact)
 helm-uninstall:

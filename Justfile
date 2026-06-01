@@ -164,6 +164,21 @@ k3s-status:
 k3s-logs POD:
     KUBECONFIG=~/.kube/factory-sim.yaml kubectl logs -f {{POD}}
 
+# Restore Tailscale Funnel on the platform EC2 (run after reboots)
+funnel-setup:
+    #!/bin/bash
+    set -euo pipefail
+    DEVICE_DATA=$(jq -r '.devices.ec2' {{justfile_directory()}}/deploy/inventory.json)
+    HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
+    SSH_USER=$(echo "$DEVICE_DATA" | jq -r '.ssh_user // "ec2-user"')
+    ssh "$SSH_USER@$HOST" "
+      sudo tailscale funnel --https=443 off 2>/dev/null || true
+      sudo tailscale funnel --https=8443 off 2>/dev/null || true
+      sudo tailscale funnel --bg --https=443 8080
+      sudo tailscale funnel --bg --https=8443 3001
+      sudo tailscale funnel status
+    "
+
 # Delete all Failed/Evicted pods (safe to run any time)
 k3s-clean-pods:
     KUBECONFIG=~/.kube/factory-sim.yaml kubectl delete pods --field-selector=status.phase=Failed -n default || true

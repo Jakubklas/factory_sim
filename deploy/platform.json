@@ -9,7 +9,7 @@
       "deploy_target": "ec2",
       "description": "Web UI served from a separate server, needs access to backend APIs",
       "ports": ["8080"],
-      "public_url": "https://factory-sim-ec2.tail43d28d.ts.net:8443"
+      "public_url": "https://factory-sim-ec2.coat-augmented.ts.net:8443"
     }
   }
 }

@@ -42,7 +42,7 @@
       "name": "Bypass PLC",
       "simulated": true,
       "protocol": "opcua",
-      "uri": "opc.tcp://pi.tail43d28d.ts.net",
+      "uri": "opc.tcp://pi.coat-augmented.ts.net",
       "port": 4841,
       "endpoint": "/",
       "deploy_target": "pi",

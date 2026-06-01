@@ -6,7 +6,7 @@ metadata:
     app: frontend
     {{- include "factory-sim.labels" . | nindent 4 }}
   annotations:
-    keel.sh/policy: force
+    keel.sh/policy: glob
     keel.sh/trigger: poll
     keel.sh/pollSchedule: "@every 5m"
 spec:

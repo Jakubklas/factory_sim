@@ -21,6 +21,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@v3
+      - name: Set short SHA
+        id: vars
+        run: echo "sha=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
       - name: Build & push simulator
         uses: docker/build-push-action@v6
         with:
@@ -28,7 +31,9 @@ jobs:
           file: simulator/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.REGISTRY }}/simulator:latest
+          tags: |
+            ${{ env.REGISTRY }}/simulator:latest
+            ${{ env.REGISTRY }}/simulator:main-${{ steps.vars.outputs.sha }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/simulator:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/simulator:buildcache,mode=max
 
@@ -45,6 +50,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@v3
+      - name: Set short SHA
+        id: vars
+        run: echo "sha=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
       - name: Build & push backend
         uses: docker/build-push-action@v6
         with:
@@ -52,7 +60,9 @@ jobs:
           file: backend/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.REGISTRY }}/backend:latest
+          tags: |
+            ${{ env.REGISTRY }}/backend:latest
+            ${{ env.REGISTRY }}/backend:main-${{ steps.vars.outputs.sha }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/backend:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/backend:buildcache,mode=max
 
@@ -69,6 +79,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@v3
+      - name: Set short SHA
+        id: vars
+        run: echo "sha=${GITHUB_SHA::8}" >> $GITHUB_OUTPUT
       - name: Build & push frontend
         uses: docker/build-push-action@v6
         with:
@@ -76,6 +89,8 @@ jobs:
           file: frontend/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ env.REGISTRY }}/frontend:latest
+          tags: |
+            ${{ env.REGISTRY }}/frontend:latest
+            ${{ env.REGISTRY }}/frontend:main-${{ steps.vars.outputs.sha }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/frontend:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/frontend:buildcache,mode=max

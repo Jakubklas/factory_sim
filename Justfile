@@ -163,3 +163,36 @@ k3s-status:
 # Stream logs from a named pod.  Usage: just k3s-logs backend-<hash>
 k3s-logs POD:
     KUBECONFIG=~/.kube/factory-sim.yaml kubectl logs -f {{POD}}
+
+# Delete all Failed/Evicted pods (safe to run any time)
+k3s-clean-pods:
+    KUBECONFIG=~/.kube/factory-sim.yaml kubectl delete pods --field-selector=status.phase=Failed -n default || true
+    KUBECONFIG=~/.kube/factory-sim.yaml kubectl delete pods --field-selector=status.phase=Failed -n kube-system || true
+
+# Tune kubelet image GC on the k3s server node so disk fills at 60% not 85%.
+# Run once after provisioning, then restart k3s: sudo systemctl restart k3s
+k3s-tune-gc:
+    #!/bin/bash
+    set -euo pipefail
+    DEVICE_DATA=$(jq -r '.devices.ec2' {{justfile_directory()}}/deploy/inventory.json)
+    HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
+    SSH_USER=$(echo "$DEVICE_DATA" | jq -r '.ssh_user // "ec2-user"')
+    tailscale ssh "$SSH_USER@$HOST" "bash -s" <<'EOF'
+set -euo pipefail
+CONFIG=/etc/rancher/k3s/config.yaml
+sudo mkdir -p "$(dirname $CONFIG)"
+# Append kubelet-arg block only if not already present
+if ! sudo grep -q image-gc-high-threshold "$CONFIG" 2>/dev/null; then
+  sudo tee -a "$CONFIG" > /dev/null <<YAML
+
+kubelet-arg:
+  - "image-gc-high-threshold=60"
+  - "image-gc-low-threshold=40"
+YAML
+  echo "GC thresholds written to $CONFIG"
+else
+  echo "GC thresholds already configured"
+fi
+sudo systemctl restart k3s
+echo "k3s restarted"
+EOF

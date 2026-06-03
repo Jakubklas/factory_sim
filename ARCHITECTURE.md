@@ -208,7 +208,7 @@ The stack spans two physical machines connected by Tailscale. k3s (lightweight K
                                         ▼
                     ┌─────────────────────────────────────────────┐
                     │         Tailscale Funnel (cloud relay)      │
-                    │  <node>.your-tailnet.ts.net                 │
+                    │  <node>.coat-augmented.ts.net               │
                     │  terminates TLS, forwards plain HTTP        │
                     │  :443  ──► node host :8080                  │
                     │  :8443 ──► node host :3001                  │
@@ -216,10 +216,10 @@ The stack spans two physical machines connected by Tailscale. k3s (lightweight K
                                         │ plain HTTP (to node)
                                         │
 ╔═══════════════════════════════════════╪═════════════════════════════════════════════════╗
-║  SERVER NODE  (k3s server + worker)   │                                                ║
-║  <node1>.your-tailnet.ts.net                                                           ║
+║  SERVER NODE  (k3s server + agent)   │                                                ║
+║  <node1>.coat_augmented.ts.net                                                         ║
 ║                                       │                                                ║
-║  ┌─ ServiceLB (klipper-lb) ───────────┼──────────────────────────────────────────┐    ║
+║  ┌─ ServiceLB (klipper-lb) ───────────┼────────────────────────────────────────-──┐    ║
 ║  │  binds on host network — bridges   │  public/Tailscale traffic into pod network│    ║
 ║  │                                    ▼                                           │    ║
 ║  │   host :8080  ────────────────────────────────────► frontend pod :80           │    ║
@@ -228,16 +228,16 @@ The stack spans two physical machines connected by Tailscale. k3s (lightweight K
 ║                                                                                        ║
 ║  ┌─ frontend pod ──────────────────────────────────────────────────────────────────┐   ║
 ║  │  nginx + React SPA                                                              │   ║
-║  │  BE_URL = https://<node1>.your-tailnet.ts.net:8443  (baked in at build time)   │   ║
+║  │  BE_URL = https://<node1>.coat_augmented.ts.net:8443  (baked in at build time)  │   ║
 ║  └──────────────────────────────────────────────────────────────────────────────-──┘   ║
 ║                                                                                        ║
 ║  ┌─ backend pod ───────────────────────────────────────────────────────────────────┐   ║
-║  │  axum HTTP + WebSocket · OPC-UA connectors (one thread per PLC)                │   ║
+║  │  axum HTTP + WebSocket · OPC-UA connectors (one thread per PLC)                 │   ║
 ║  │                                                                                 │   ║
-║  │  plc-001 (same node) ──► svc/plc-001 ClusterIP :4840                       ─┐  │   ║
+║  │  plc-001 (same node) ──► svc/plc-001 ClusterIP :4840                        ─┐  │   ║
 ║  │                          CoreDNS resolves "plc-001" inside the cluster       │  │   ║
 ║  │                                                                              │  │   ║
-║  │  plc-002 (remote node) ──► <node2>.your-tailnet.ts.net:4841  ──► Tailscale ──┼──┼──╬──►
+║  │  plc-002 (remote node) ──► <node2>.coat-augmented.ts.net:4841  ──► Tailscale ──┼──┼──╬──►
 ║  └──────────────────────────────────────────────────────────────────────────────┼──┘   ║
 ║                                                                                 │      ║
 ║  ┌─ plc-001 pod ──────────────────────┐   ┌─ svc: plc-001 (ClusterIP) ──────┐  │      ║
@@ -249,7 +249,7 @@ The stack spans two physical machines connected by Tailscale. k3s (lightweight K
                                       │  encrypted · no open firewall ports
                                       │
 ╔═════════════════════════════════════╪═════════════════════════════════════════════════╗
-║  WORKER NODE  (k3s agent)           │                                                ║
+║  AGENT NODE           │                                                ║
 ║  <node2>.your-tailnet.ts.net        │                                                ║
 ║                                     ▼                                                ║
 ║  ┌─ ServiceLB (klipper-lb) ────────────────────────────────────────────────────┐    ║
@@ -299,14 +299,14 @@ Helm compares manifests, not image digests. Pushing a new `:latest` image while 
 Tailscale Funnel proxies HTTPS traffic using HTTP/2. HTTP/2 doesn't support WebSocket upgrade (`101 Switching Protocols`). If the browser reaches the backend over Funnel on port 443, the WS handshake silently fails. Fix: expose the backend on a separate Funnel port (e.g. 8443) — the browser opens a fresh TCP connection to that port, negotiates HTTP/1.1, and the WS upgrade succeeds.
 
 **k3s agent local load balancer (`127.0.0.1:6444`) and resource pressure.**
-The k3s agent on each worker node runs a local load balancer that proxies control-plane traffic from `127.0.0.1:6444` to the server's `6443`. The agent bootstraps by posting certificate signing requests through this LB. If the k3s server node is memory- or I/O-constrained (high swap usage, iowait >50%), the server's API responses exceed the agent's default timeouts and every cert request is logged as "context deadline exceeded". The agent keeps retrying but never completes bootstrap, leaving the node `NotReady`. **Fix: ensure the server node has enough RAM** — k3s server alone consumes ~350 MB; add workload pods and you need at least 2 GB free to avoid swap. Swapping turns 1ms disk ops into 100ms+, which breaks all internal timeouts.
+The k3s agent on each agent node runs a local load balancer that proxies control-plane traffic from `127.0.0.1:6444` to the server's `6443`. The agent bootstraps by posting certificate signing requests through this LB. If the k3s server node is memory- or I/O-constrained (high swap usage, iowait >50%), the server's API responses exceed the agent's default timeouts and every cert request is logged as "context deadline exceeded". The agent keeps retrying but never completes bootstrap, leaving the node `NotReady`. **Fix: ensure the server node has enough RAM** — k3s server alone consumes ~350 MB; add workload pods and you need at least 2 GB free to avoid swap. Swapping turns 1ms disk ops into 100ms+, which breaks all internal timeouts.
 
 **`deploy_target` label lost after node re-registration.**
-When a worker node leaves and rejoins the cluster (e.g. after a full agent uninstall/reinstall), its custom labels are not preserved — the node object is re-created fresh with only the default k3s labels. Any Deployments with `nodeSelector: deploy_target: <value>` will stay Pending until the label is reapplied:
+When an agent node leaves and rejoins the cluster (e.g. after a full agent uninstall/reinstall), its custom labels are not preserved — the node object is re-created fresh with only the default k3s labels. Any Deployments with `nodeSelector: deploy_target: <value>` will stay Pending until the label is reapplied:
 ```
 kubectl label node <node-name> deploy_target=<value>
 ```
-Add this step to the runbook for any worker node rebuild.
+Add this step to the runbook for any agent node rebuild.
 
 **Local-path-provisioner PVC directories are node-local.**
 The default k3s storage class (`local-path`) creates directories under `/var/lib/rancher/k3s/storage/` on whichever node the pod first schedules on. The PV is then pinned to that node via node affinity. If the PVC is created while the target node is `NotReady`, the provisioner's setup job can't run, so the directory is never created even though the PV shows `Bound`. The pod then fails with `MountVolume.NewMounter initialization failed: path does not exist`. Fix: create the directory manually on the target node, or delete the PVC and let it reprovision once the node is Ready.
@@ -391,7 +391,7 @@ Images are never built on the deployment target. They are built once by CI and s
         │  k3s scheduler places pods on correct nodes via nodeSelector
         │  each node pulls the image it needs from GHCR
         ▼
-  running stack  (EC2 + worker nodes)
+  running stack  (EC2 + agent nodes)
 ```
 
 ---

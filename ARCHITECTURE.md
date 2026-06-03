@@ -74,7 +74,7 @@ Industrial-twin platform. A simulator emits OPC-UA telemetry indistinguishable f
 └────────────────────────┘  └──────────────────────────┘
 
 ┌─ codegen ─────────────────────────────────────────┐
-│  Dev-time tooling only. Never runs in production. │
+│  Deployment tooling only. Never runs in prod.     │
 │                                                   │
 │  src/bin/gen_helm_values.rs                       │
 │    reads plant.json + platform.json +             │
@@ -130,10 +130,10 @@ The path of a single metric value from physics tick to browser:
 ```
 ┌─────────── simulator process ──────────────────┐
 │                                                │
-│  ┌──────────┐  write  ┌──────────────┐         │
-│  │ physics  ├────────>│ SimulatorState│        │
-│  │ (rhai)   │<────────┤   (private)  │         │
-│  └──────────┘  read   └───────┬──────┘         │
+│  ┌──────────┐  write  ┌──────────-───-─┐       │
+│  │ physics  ├────────>│ SimulatorState │       │
+│  │ (rhai)   │<────────┤   (private)    │       │
+│  └──────────┘  read   └───────┬───-───-┘       │
 │               inputs          │ snapshot       │
 │                               ▼                │
 │                        ┌──────────────┐        │
@@ -153,9 +153,9 @@ The path of a single metric value from physics tick to browser:
 │                          └───────┬──────┘      │
 │                                  │ upsert      │
 │                                  ▼             │
-│                          ┌──────────────┐      │
-│                          │ IngestedState│      │
-│                          └───────┬──────┘      │
+│                          ┌─────────────-─┐     │
+│                          │ IngestedState │     │
+│                          └───────┬───-─-─┘     │
 │                                  │ snapshot    │
 │                                  ▼             │
 │                          ┌──────────────┐      │
@@ -198,31 +198,72 @@ State-sharing primitives:
 The stack spans two physical machines connected by Tailscale. k3s (lightweight Kubernetes) runs on both; Tailscale is the cluster network — flannel routes all pod-to-pod traffic through the encrypted Tailscale tunnel, so no cloud firewall rules are needed beyond Tailscale itself.
 
 ```
-┌─ Server node  (k3s server + worker) ──────────────────────────────────────────────────────┐
-│                                                                                           │
-│  ╔═ ServiceLB — binds on tailscale0 host interface ════════════════════╗                  │
-│  ║  :8080 ──────────────────────────────► frontend pod :80            ║ ◄── browser       │
-│  ║  :3001 ──────────────────────────────► backend pod  :3001          ║ ◄── browser (API) │
-│  ╚══════════════════════════════════════════════════════════════════════╝                  │
-│                                                                                           │
-│  ┌─ frontend pod ───────────┐    ┌─ backend pod ───────────────────────────────────┐     │
-│  │  nginx · built React SPA │    │  axum · OPC-UA connectors                       │     │
-│  │  BE_URL=http://node1:3001│    │  plc-001 ──► svc/plc-001:4840  (CoreDNS)        │     │
-│  └──────────────────────────┘    │  plc-002 ──► node2:4841        (Tailscale LB)   │     │
-│                                  └─────────────────────────────────────────────────┘     │
-│  ┌─ plc-001 pod ────────────┐    ┌─ svc: plc-001 ─────────────────────────────────┐     │
-│  │  OPC-UA server   :4840   │◄───│  ClusterIP :4840  · cluster-internal only       │     │
-│  └──────────────────────────┘    └────────────────────────────────────────────────-┘     │
-│                                                                                           │
-└───────────────────────── Tailscale VPN (WireGuard) · flannel overlay ─────────────────────┘
-                            all cross-node cluster traffic is encrypted + routed here
-┌─ Worker node  <node2>.your-tailnet.ts.net  (k3s agent) ───────────────────────────────────┐
-│                                                                                           │
-│  ┌─ plc-002 pod ────────────┐    ┌─ svc: plc-002 ─────────────────────────────────┐     │
-│  │  OPC-UA server   :4841   │◄───│  LoadBalancer :4841  · binds on tailscale0      │◄────┼── backend
-│  └──────────────────────────┘    │  reachable at <node2>.your-tailnet.ts.net:4841  │     │   (Tailscale)
-│                                  └─────────────────────────────────────────────────┘     │
-└───────────────────────────────────────────────────────────────────────────────────────────┘
+                    ┌─────────────────────────────────────────────┐
+                    │            PUBLIC INTERNET                  │
+                    │                                             │
+                    │   browser → :443 (frontend)                 │
+                    │   browser → :8443 (backend WebSocket)       │
+                    └───────────────────┬─────────────────────────┘
+                                        │ HTTPS
+                                        ▼
+                    ┌─────────────────────────────────────────────┐
+                    │         Tailscale Funnel (cloud relay)      │
+                    │  <node>.your-tailnet.ts.net                 │
+                    │  terminates TLS, forwards plain HTTP        │
+                    │  :443  ──► node host :8080                  │
+                    │  :8443 ──► node host :3001                  │
+                    └───────────────────┬─────────────────────────┘
+                                        │ plain HTTP (to node)
+                                        │
+╔═══════════════════════════════════════╪═════════════════════════════════════════════════╗
+║  SERVER NODE  (k3s server + worker)   │                                                ║
+║  <node1>.your-tailnet.ts.net                                                           ║
+║                                       │                                                ║
+║  ┌─ ServiceLB (klipper-lb) ───────────┼──────────────────────────────────────────┐    ║
+║  │  binds on host network — bridges   │  public/Tailscale traffic into pod network│    ║
+║  │                                    ▼                                           │    ║
+║  │   host :8080  ────────────────────────────────────► frontend pod :80           │    ║
+║  │   host :3001  ────────────────────────────────────► backend pod  :3001         │    ║
+║  └──────────────────────────────────────────────────────────────────────────────-─┘    ║
+║                                                                                        ║
+║  ┌─ frontend pod ──────────────────────────────────────────────────────────────────┐   ║
+║  │  nginx + React SPA                                                              │   ║
+║  │  BE_URL = https://<node1>.your-tailnet.ts.net:8443  (baked in at build time)   │   ║
+║  └──────────────────────────────────────────────────────────────────────────────-──┘   ║
+║                                                                                        ║
+║  ┌─ backend pod ───────────────────────────────────────────────────────────────────┐   ║
+║  │  axum HTTP + WebSocket · OPC-UA connectors (one thread per PLC)                │   ║
+║  │                                                                                 │   ║
+║  │  plc-001 (same node) ──► svc/plc-001 ClusterIP :4840                       ─┐  │   ║
+║  │                          CoreDNS resolves "plc-001" inside the cluster       │  │   ║
+║  │                                                                              │  │   ║
+║  │  plc-002 (remote node) ──► <node2>.your-tailnet.ts.net:4841  ──► Tailscale ──┼──┼──╬──►
+║  └──────────────────────────────────────────────────────────────────────────────┼──┘   ║
+║                                                                                 │      ║
+║  ┌─ plc-001 pod ──────────────────────┐   ┌─ svc: plc-001 (ClusterIP) ──────┐  │      ║
+║  │  OPC-UA server · :4840             │◄──│  cluster-internal only           │◄─┘      ║
+║  │  not reachable outside cluster     │   │  no host port consumed           │         ║
+║  └────────────────────────────────────┘   └──────────────────────────────────┘         ║
+║                                                                                        ║
+╚══════════════════════════════ flannel VXLAN tunnel over Tailscale WireGuard ═══════════╝
+                                      │  encrypted · no open firewall ports
+                                      │
+╔═════════════════════════════════════╪═════════════════════════════════════════════════╗
+║  WORKER NODE  (k3s agent)           │                                                ║
+║  <node2>.your-tailnet.ts.net        │                                                ║
+║                                     ▼                                                ║
+║  ┌─ ServiceLB (klipper-lb) ────────────────────────────────────────────────────┐    ║
+║  │  binds on host network — exposes plc-002 OPC-UA port to the Tailscale VPN   │    ║
+║  │                                                                              │    ║
+║  │   host :4841  ────────────────────────────────────► plc-002 pod :4841        │    ║
+║  └──────────────────────────────────────────────────────────────────────────────┘    ║
+║                                                                                      ║
+║  ┌─ plc-002 pod ─────────────────────────────────────────────────────────────────┐   ║
+║  │  OPC-UA server · :4841                                                        │   ║
+║  │  reachable from backend via <node2>.your-tailnet.ts.net:4841                  │   ║
+║  └───────────────────────────────────────────────────────────────────────────────┘   ║
+║                                                                                      ║
+╚══════════════════════════════════════════════════════════════════════════════════════╝
 ```
 
 **Why k3s, not plain Docker Compose.** Compose requires SSH-ing into each machine and running commands manually. k3s gives a single control plane: `just helm-deploy` from a laptop reaches both machines simultaneously, workloads land on the right node automatically, and crashed pods restart without intervention.

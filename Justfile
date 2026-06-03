@@ -193,22 +193,14 @@ k3s-tune-gc:
     DEVICE_DATA=$(jq -r '.devices.ec2' {{justfile_directory()}}/deploy/inventory.json)
     HOST=$(echo "$DEVICE_DATA" | jq -r '.host')
     SSH_USER=$(echo "$DEVICE_DATA" | jq -r '.ssh_user // "ec2-user"')
-    tailscale ssh "$SSH_USER@$HOST" "bash -s" <<'EOF'
-set -euo pipefail
-CONFIG=/etc/rancher/k3s/config.yaml
-sudo mkdir -p "$(dirname $CONFIG)"
-# Append kubelet-arg block only if not already present
-if ! sudo grep -q image-gc-high-threshold "$CONFIG" 2>/dev/null; then
-  sudo tee -a "$CONFIG" > /dev/null <<YAML
-
-kubelet-arg:
-  - "image-gc-high-threshold=60"
-  - "image-gc-low-threshold=40"
-YAML
-  echo "GC thresholds written to $CONFIG"
-else
-  echo "GC thresholds already configured"
-fi
-sudo systemctl restart k3s
-echo "k3s restarted"
-EOF
+    ssh "$SSH_USER@$HOST" 'bash -c "
+      CONFIG=/etc/rancher/k3s/config.yaml
+      sudo mkdir -p \$(dirname \$CONFIG)
+      if ! sudo grep -q image-gc-high-threshold \$CONFIG 2>/dev/null; then
+        printf \"\nkubelet-arg:\n  - image-gc-high-threshold=60\n  - image-gc-low-threshold=40\n\" | sudo tee -a \$CONFIG
+        echo GC thresholds written
+      else
+        echo GC thresholds already configured
+      fi
+      sudo systemctl restart k3s && echo k3s restarted
+    "'

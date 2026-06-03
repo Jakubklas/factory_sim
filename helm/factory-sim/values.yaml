@@ -7,8 +7,8 @@ imageTag: latest
 plcs:
   - id: plc-001
     port: 4840
-    deployTarget: ec2
-    serviceType: ClusterIP
+    deployTarget: pi
+    serviceType: LoadBalancer
   - id: plc-002
     port: 4841
     deployTarget: pi

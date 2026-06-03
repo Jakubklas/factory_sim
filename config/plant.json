@@ -10,7 +10,7 @@
       "protocol": "opcua",
       "port": 4840,
       "endpoint": "/",
-      "deploy_target": "ec2",
+      "deploy_target": "pi",
       "devices": [
         {
           "device_id": "boiler_001",

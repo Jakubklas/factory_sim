@@ -36,10 +36,28 @@ helm-deploy:
         --set-file plantConfig={{config_dir}}/plant.json \
         --set-file deviceTypesConfig={{config_dir}}/device_types.json \
         --set-file nginxConfig=frontend/docker/nginx.conf
+    just _migrate-pvcs
     KUBECONFIG=~/.kube/factory-sim.yaml kubectl rollout restart deployment
     @echo "Waiting for rollout..."
     KUBECONFIG=~/.kube/factory-sim.yaml kubectl rollout status deployment --timeout=120s
     just funnel-setup
+
+# Internal: delete PVCs for any PLC pod that's on the wrong node after a deploy_target change.
+# The PVC will be recreated on the correct node when the pod reschedules.
+_migrate-pvcs:
+    #!/bin/bash
+    set -euo pipefail
+    KC="KUBECONFIG=~/.kube/factory-sim.yaml kubectl"
+    for plc in $(KUBECONFIG=~/.kube/factory-sim.yaml kubectl get deployments -o name | grep plc | sed 's|deployment.apps/||'); do
+        desired=$(KUBECONFIG=~/.kube/factory-sim.yaml kubectl get deployment "$plc" -o jsonpath='{.spec.template.spec.nodeSelector.deploy_target}')
+        node=$(KUBECONFIG=~/.kube/factory-sim.yaml kubectl get pods -l app="$plc" -o jsonpath='{.items[0].spec.nodeName}' 2>/dev/null || true)
+        if [ -z "$node" ]; then continue; fi
+        node_label=$(KUBECONFIG=~/.kube/factory-sim.yaml kubectl get node "$node" -o jsonpath='{.metadata.labels.deploy_target}' 2>/dev/null || true)
+        if [ "$node_label" != "$desired" ]; then
+            echo "  $plc is on '$node_label' but deploy_target='$desired' — deleting PVC so it reprovisions on the correct node"
+            KUBECONFIG=~/.kube/factory-sim.yaml kubectl delete pvc "${plc}-data" --ignore-not-found || true
+        fi
+    done
 
 # Uninstall the Helm release (leaves PVCs and ConfigMaps intact)
 helm-uninstall:

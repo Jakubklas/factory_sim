@@ -47,8 +47,17 @@ RUN touch plant_config/src/lib.rs backend/src/main.rs && \
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget && \
+ARG TARGETARCH
+ARG KUBECTL_VERSION=v1.29.0
+
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget curl && \
     rm -rf /var/lib/apt/lists/*
+
+# Install kubectl for the target arch — used by the k8s reconciler.
+RUN ARCH=$([ "$TARGETARCH" = "arm64" ] && echo "arm64" || echo "amd64") && \
+    wget -q "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${ARCH}/kubectl" \
+         -O /usr/local/bin/kubectl && \
+    chmod +x /usr/local/bin/kubectl
 
 COPY --from=builder /usr/local/bin/backend /usr/local/bin/backend
 

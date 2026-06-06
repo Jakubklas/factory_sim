@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let tick_ms = loader::tick_ms();
-    let plant   = loader::load()?;
+    let plant   = loader::load().await?;
 
     // After slicing, exactly one PLC remains — the one this process owns.
     let plc = plant.config.plcs[0].clone();

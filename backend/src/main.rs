@@ -16,6 +16,7 @@ mod api;
 mod db;
 mod assets;
 mod orchestration;
+mod k8s;
 
 use config_handle::load_all;
 use comms::DiscoveredState;
@@ -79,15 +80,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ingested_ws   = ingested.clone();
     let discovered_ws = Arc::clone(&discovered);
     let ws_host       = app.ws_host.clone();
+    let plant_ws      = Arc::clone(&plant);
+    let db_pool_ws    = db_pool.clone();
 
     tokio::spawn(async move {
         if let Err(e) = api::ws_bridge::start(
-            ingested_ws, plant, app.tick_ms, &ws_host, app.ws_port, log_handle,
-            db_pool, asset_store, discovered_ws, Arc::clone(&write_handles_arc),
+            ingested_ws, plant_ws, app.tick_ms, &ws_host, app.ws_port, log_handle,
+            db_pool_ws, asset_store, discovered_ws, Arc::clone(&write_handles_arc),
         ).await {
             tracing::error!("WS bridge error: {}", e);
         }
     });
+
+    // K8s reconciler — creates/deletes sim PLC pods to match desired state.
+    // Reads SIMULATOR_IMAGE, BACKEND_SVC_URL, K8S_NAMESPACE from env.
+    // Silently skips if kubectl is not in PATH (dev / non-cluster mode).
+    {
+        let sim_image   = std::env::var("SIMULATOR_IMAGE").unwrap_or_else(|_| "factory-sim/simulator:latest".into());
+        let backend_url = std::env::var("BACKEND_SVC_URL").unwrap_or_else(|_| format!("http://backend:{}", app.ws_port));
+        let namespace   = std::env::var("K8S_NAMESPACE").unwrap_or_else(|_| "default".into());
+        k8s::start(Arc::clone(&plant), sim_image, backend_url, namespace, db_pool);
+    }
 
     tracing::info!("\n  ══ Running — press Ctrl-C or send SIGTERM to stop ══\n");
     shutdown_signal().await;

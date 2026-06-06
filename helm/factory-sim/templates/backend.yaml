@@ -19,6 +19,7 @@ spec:
       labels:
         app: backend
     spec:
+      serviceAccountName: backend
       nodeSelector:
         deploy_target: {{ .Values.backend.deployTarget }}
       containers:
@@ -36,6 +37,14 @@ spec:
           value: "100"
         - name: PKI_DIR
           value: /data/pki
+        - name: SIMULATOR_IMAGE
+          value: "{{ .Values.registry }}/simulator:{{ .Values.imageTag }}"
+        - name: BACKEND_SVC_URL
+          value: "http://backend:{{ .Values.backend.port }}"
+        - name: K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
         ports:
         - containerPort: {{ .Values.backend.port }}
         livenessProbe:

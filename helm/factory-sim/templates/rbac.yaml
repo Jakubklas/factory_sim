@@ -1,0 +1,67 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: backend
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "factory-sim.labels" . | nindent 4 }}
+---
+# Role for namespace-scoped resources the backend manages (sim PLC pods).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backend-sim-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "factory-sim.labels" . | nindent 4 }}
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "create", "delete", "patch", "update"]
+- apiGroups: [""]
+  resources: ["services", "persistentvolumeclaims"]
+  verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backend-sim-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "factory-sim.labels" . | nindent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: backend
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: backend-sim-manager
+  apiGroup: rbac.authorization.k8s.io
+---
+# ClusterRole for node listing (nodes are cluster-scoped).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-backend-node-reader
+  labels:
+    {{- include "factory-sim.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-backend-node-reader
+  labels:
+    {{- include "factory-sim.labels" . | nindent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: backend
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-backend-node-reader
+  apiGroup: rbac.authorization.k8s.io

@@ -1,94 +1,13 @@
-{{- range .Values.plcs }}
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: {{ .id }}
-  labels:
-    app: {{ .id }}
-    {{- include "factory-sim.labels" $ | nindent 4 }}
-  annotations:
-    keel.sh/policy: glob
-    keel.sh/trigger: poll
-    keel.sh/pollSchedule: "@every 5m"
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: {{ .id }}
-  template:
-    metadata:
-      labels:
-        app: {{ .id }}
-    spec:
-      nodeSelector:
-        deploy_target: {{ .deployTarget }}
-      containers:
-      - name: simulator
-        image: {{ $.Values.registry }}/simulator:{{ $.Values.imageTag }}
-        imagePullPolicy: Always
-        env:
-        - name: PLANT_CONFIG
-          value: /config
-        - name: SIM_PLC_ID
-          value: {{ .id }}
-        - name: SIM_TICK_MS
-          value: "100"
-        - name: OPCUA_HOST
-          value: {{ .id }}
-        - name: PKI_DIR
-          value: /data/pki
-        ports:
-        - containerPort: {{ .port }}
-        - containerPort: 9000
-          name: health
-        livenessProbe:
-          httpGet:
-            path: /health
-            port: 9000
-          initialDelaySeconds: 10
-          periodSeconds: 15
-          failureThreshold: 3
-        volumeMounts:
-        - name: config
-          mountPath: /config
-          readOnly: true
-        - name: data
-          mountPath: /data
-      volumes:
-      - name: config
-        configMap:
-          name: plant-config
-      - name: data
-        persistentVolumeClaim:
-          claimName: {{ .id }}-data
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {{ .id }}-data
-  labels:
-    app: {{ .id }}
-    {{- include "factory-sim.labels" $ | nindent 4 }}
-spec:
-  accessModes:
-  - ReadWriteOnce
-  resources:
-    requests:
-      storage: 100Mi
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: {{ .id }}
-  labels:
-    app: {{ .id }}
-    {{- include "factory-sim.labels" $ | nindent 4 }}
-spec:
-  type: {{ .serviceType }}
-  selector:
-    app: {{ .id }}
-  ports:
-  - port: {{ .port }}
-    targetPort: {{ .port }}
-{{- end }}
+# Simulator pods are no longer defined statically in Helm.
+# The backend reconciler creates a Deployment + Service + PVC for each
+# simulated PLC defined in the plant config (or DB when DATABASE_URL is set).
+# See backend/src/k8s.rs for the reconcile loop.
+#
+# To provision sim pods:
+#   1. Deploy the helm chart (backend + RBAC).
+#   2. The backend creates sim pods on first reconcile (within 30s of startup).
+#
+# To add a new simulated PLC (file-based, Phase 5):
+#   - Add the PLC to config/plant.json, redeploy backend image.
+# To add a new simulated PLC (DB-based, Phase 6+):
+#   - POST /api/plcs with kind=simulated; reconciler reacts within 30s.

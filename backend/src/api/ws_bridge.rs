@@ -13,7 +13,7 @@ use axum::{
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{EnvFilter, reload};
 use uuid::Uuid;
-use plant_config::{ResolvedPlant, PlantConfig};
+use plant_config::{ResolvedPlant, PlantConfig, DeviceTypeDefinition};
 use sqlx::PgPool;
 
 use crate::assets::LocalStore;
@@ -71,6 +71,8 @@ pub async fn start(
         .route("/api/plcs/:plc_id/instances/:id", delete(delete_instance))
         // Discovered nodes (per PLC — populated by browse after each connect)
         .route("/api/plcs/:plc_id/discovered", get(list_discovered))
+        // Simulator self-build config (fetched by sim pods on startup)
+        .route("/api/plcs/:plc_id/config", get(sim_config))
         // Setpoint write
         .route("/api/setpoint", axum::routing::post(write_setpoint))
         // Wires
@@ -220,6 +222,69 @@ async fn list_discovered(
     let map  = s.discovered.read().await;
     let nodes = map.get(&name).cloned().unwrap_or_default();
     Ok(Json(nodes))
+}
+
+// ============================================================================
+// Simulator self-build config — GET /api/plcs/:plc_id/config
+//
+// A simulator pod fetches this on startup instead of reading plant.json from a
+// ConfigMap. :plc_id is either the plant.json plc_id string ("plc-001") or,
+// when using DB-backed provisioning, a UUID that maps to a name.
+//
+// Returns: { "plc": <PlcConfig>, "device_types": [<DeviceTypeDefinition>] }
+// The simulator deserializes these and calls ResolvedPlant::build().
+// ============================================================================
+
+#[derive(serde::Serialize)]
+struct SimConfigResponse {
+    plc:          plant_config::PlcConfig,
+    device_types: Vec<DeviceTypeDefinition>,
+}
+
+async fn sim_config(
+    Path(plc_id): Path<String>,
+    State(s): State<AppState>,
+) -> Result<Json<SimConfigResponse>, (StatusCode, String)> {
+    // Try to find the PLC in the loaded plant by plc_id string first.
+    // If a UUID was given, also try matching against DB name.
+    let plc = s.plant.config.plcs.iter()
+        .find(|p| p.plc_id == plc_id)
+        .cloned();
+
+    // If not found by plc_id, try DB name lookup (UUID → name → plc_id match).
+    let plc = if plc.is_none() {
+        if let Ok(uuid) = plc_id.parse::<uuid::Uuid>() {
+            if let Some(pool) = &s.db {
+                let row = sqlx::query_as::<_, (String,)>("SELECT name FROM plcs WHERE id = $1")
+                    .bind(uuid)
+                    .fetch_optional(pool)
+                    .await
+                    .map_err(db_err)?;
+                row.and_then(|(name,)| {
+                    s.plant.config.plcs.iter().find(|p| p.name == name).cloned()
+                })
+            } else { None }
+        } else { None }
+    } else { plc };
+
+    let plc = plc.ok_or_else(|| (StatusCode::NOT_FOUND, format!("PLC '{}' not found", plc_id)))?;
+
+    if !plc.simulated {
+        return Err((StatusCode::BAD_REQUEST, "config endpoint is only for simulated PLCs".into()));
+    }
+
+    // Collect unique device types referenced by this PLC's devices.
+    let plc_device_types: std::collections::HashSet<String> = plc.devices.iter()
+        .map(|d| d.device_type.clone())
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    let device_types: Vec<DeviceTypeDefinition> = s.plant.devices.iter()
+        .filter(|d| plc_device_types.contains(&d.type_def.device_type))
+        .filter(|d| seen.insert(d.type_def.device_type.clone()))
+        .map(|d| d.type_def.clone())
+        .collect();
+
+    Ok(Json(SimConfigResponse { plc, device_types }))
 }
 
 // ============================================================================

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt, reload};
 
 struct SecondsTimer;
@@ -15,6 +17,7 @@ mod db;
 mod assets;
 
 use config_handle::load_all;
+use comms::DiscoveredState;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -31,7 +34,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (app, plant) = load_all()?;
 
-    // Database — optional: if DATABASE_URL is unset the DB features are skipped.
     let db_pool = match std::env::var("DATABASE_URL") {
         Ok(url) => {
             tracing::info!("Connecting to database…");
@@ -45,8 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let asset_root = std::env::var("ASSET_DIR").unwrap_or_else(|_| "/data/assets".into());
-    let asset_store = std::sync::Arc::new(assets::LocalStore::new(asset_root));
+    let asset_root  = std::env::var("ASSET_DIR").unwrap_or_else(|_| "/data/assets".into());
+    let asset_store = Arc::new(assets::LocalStore::new(asset_root));
+    let discovered: Arc<RwLock<DiscoveredState>> = Arc::new(RwLock::new(std::collections::HashMap::new()));
 
     let addr = format!("{}:{}", app.ws_host, app.ws_port);
     tracing::info!(
@@ -60,14 +63,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         addr, addr, addr, addr, addr, addr
     );
 
-    let ingested    = plant::start(plant.clone(), app.tick_ms).await?;
-    let ingested_ws = ingested.clone();
-    let ws_host     = app.ws_host.clone();
+    let ingested = plant::start(plant.clone(), app.tick_ms, Arc::clone(&discovered)).await?;
+
+    let ingested_ws  = ingested.clone();
+    let discovered_ws = Arc::clone(&discovered);
+    let ws_host      = app.ws_host.clone();
 
     tokio::spawn(async move {
         if let Err(e) = api::ws_bridge::start(
             ingested_ws, plant, app.tick_ms, &ws_host, app.ws_port, log_handle,
-            db_pool, asset_store,
+            db_pool, asset_store, discovered_ws,
         ).await {
             tracing::error!("WS bridge error: {}", e);
         }

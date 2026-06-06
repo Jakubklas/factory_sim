@@ -2,7 +2,7 @@ use sqlx::PgPool;
 use serde_json::json;
 
 use super::models::{DeployNode, PlcKind};
-use super::queries::{upsert_deploy_node, upsert_device_type_by_name, upsert_plc, upsert_instance};
+use super::queries::{upsert_deploy_node, upsert_device_type_by_name, upsert_plc, upsert_device_instance};
 
 // Embedded JSON blobs so the backend binary is self-contained. The seeder is
 // idempotent (ON CONFLICT … DO UPDATE) so it can run on every startup.
@@ -119,7 +119,7 @@ async fn seed_plcs_and_instances(pool: &PgPool) -> Result<(), Box<dyn std::error
                 continue;
             };
 
-            upsert_instance(pool, plc.id, dt.id, &raw_dev.name, raw_dev.params.clone()).await?;
+            upsert_device_instance(pool, plc.id, dt.id, &raw_dev.name, raw_dev.params.clone()).await?;
             tracing::debug!("Seeded instance: {}.{}", raw_plc.name, raw_dev.name);
         }
     }

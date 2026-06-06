@@ -3,39 +3,60 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use async_trait::async_trait;
+use serde::{Serialize, Deserialize};
 use plant_config::DataType;
 
-/// Full shared state written by all connectors: device_id → field_name → value.
-pub type IngestedState = HashMap<String, HashMap<String, DataType>>;
-/// One connector's poll result — upserted into IngestedState each tick.
-pub type PartialState  = HashMap<String, HashMap<String, DataType>>;
+pub type IngestedState  = HashMap<String, HashMap<String, DataType>>;
+pub type PartialState   = HashMap<String, HashMap<String, DataType>>;
 
-/// Implement this to add a new protocol. connect() makes a single attempt; GenericConnector handles retry.
+/// One browsed node returned by ConnectorImpl::browse().
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowsedNode {
+    pub node_id:     String,
+    pub browse_name: String,
+    pub browse_path: Option<String>,
+    pub datatype:    Option<String>,
+    pub is_variable: bool,
+    pub writable:    bool,
+}
+
+/// Shared discovered state: PLC name → browsed nodes. Updated after every (re)connect.
+pub type DiscoveredState = HashMap<String, Vec<BrowsedNode>>;
+
+/// Implement this to add a new protocol.
+/// connect() makes a single attempt; GenericConnector handles retry.
+/// browse() is called once after each successful connect to discover the address space.
+/// poll() is called every tick to read current values.
 #[async_trait]
 pub trait ConnectorImpl: Send + Sync + 'static {
-    type Conn: Send + 'static;
+    type Conn: Send + Sync + 'static;
     async fn connect(&self) -> Result<Self::Conn, Box<dyn std::error::Error + Send + Sync>>;
+    async fn browse(&self, conn: &Self::Conn) -> Result<Vec<BrowsedNode>, Box<dyn std::error::Error + Send + Sync>>;
     /// Return Err if the connection is broken — triggers reconnect in GenericConnector.
     async fn poll(&self, conn: &Self::Conn) -> Result<PartialState, Box<dyn std::error::Error + Send + Sync>>;
 }
 
-/// One tokio task per connector. Runs connect → poll loop with exponential backoff on initial connect.
-/// async-opcua sessions reconnect internally on transient drops, so explicit reconnect is only
-/// needed when the session itself becomes permanently unrecoverable.
+/// One tokio task per connector. Runs connect → browse → poll loop.
 pub struct GenericConnector<C: ConnectorImpl> {
     name:         String,
     impl_:        C,
     tick_ms:      u64,
     ingested:     Arc<RwLock<IngestedState>>,
+    discovered:   Arc<RwLock<DiscoveredState>>,
     backoff_secs: &'static [u64],
 }
 
 impl<C: ConnectorImpl> GenericConnector<C> {
-    pub fn new(name: impl Into<String>, impl_: C, tick_ms: u64, ingested: Arc<RwLock<IngestedState>>) -> Self {
-        Self { name: name.into(), impl_, tick_ms, ingested, backoff_secs: &[1, 2, 4, 8, 16, 30] }
+    pub fn new(
+        name:       impl Into<String>,
+        impl_:      C,
+        tick_ms:    u64,
+        ingested:   Arc<RwLock<IngestedState>>,
+        discovered: Arc<RwLock<DiscoveredState>>,
+    ) -> Self {
+        Self { name: name.into(), impl_, tick_ms, ingested, discovered, backoff_secs: &[1, 2, 4, 8, 16, 30] }
     }
 
-    /// Spawn a tokio task. Consumes self — ownership moves into the task.
     pub fn start(self) {
         tokio::spawn(async move { self.run().await });
     }
@@ -65,8 +86,20 @@ impl<C: ConnectorImpl> GenericConnector<C> {
         }
     }
 
+    async fn do_browse(&self, conn: &C::Conn) {
+        match self.impl_.browse(conn).await {
+            Ok(nodes) => {
+                tracing::info!("Connector '{}' discovered {} node(s)", self.name, nodes.len());
+                self.discovered.write().await.insert(self.name.clone(), nodes);
+            }
+            Err(e) => tracing::warn!("Connector '{}' browse failed: {}", self.name, e),
+        }
+    }
+
     async fn run(self) {
         let mut conn = self.connect_with_backoff().await;
+        self.do_browse(&conn).await;
+
         let mut consecutive_failures: usize = 0;
         let summary_every = Duration::from_secs(30);
         let mut last_summary = Instant::now();
@@ -106,6 +139,7 @@ impl<C: ConnectorImpl> GenericConnector<C> {
                         partial.len(),
                         partial.keys().cloned().collect::<Vec<_>>().join(", ")
                     );
+
                     if let Ok(mut state) = self.ingested.try_write() {
                         for (device_id, fields) in partial {
                             state.entry(device_id).or_default().extend(fields);
@@ -120,10 +154,9 @@ impl<C: ConnectorImpl> GenericConnector<C> {
                         self.name, consecutive_failures, delay, e
                     );
                     tokio::time::sleep(Duration::from_secs(delay)).await;
-                    // Session auto-reconnects internally; only re-establish the outer Conn when
-                    // failures persist long enough to suggest the session event loop gave up.
                     if consecutive_failures >= self.backoff_secs.len() {
                         conn = self.connect_with_backoff().await;
+                        self.do_browse(&conn).await;
                         consecutive_failures = 0;
                     }
                 }

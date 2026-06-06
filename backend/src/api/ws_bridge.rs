@@ -16,9 +16,8 @@ use uuid::Uuid;
 use plant_config::{ResolvedPlant, PlantConfig};
 use sqlx::PgPool;
 
-#[allow(unused_imports)]
 use crate::assets::LocalStore;
-use crate::comms::IngestedState;
+use crate::comms::{BrowsedNode, DiscoveredState, IngestedState};
 use crate::db::{models, queries};
 
 type LogHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
@@ -30,7 +29,9 @@ struct AppState {
     tick_ms:     u64,
     log_handle:  LogHandle,
     db:          Option<PgPool>,
+    #[allow(dead_code)]
     assets:      Arc<LocalStore>,
+    discovered:  Arc<RwLock<DiscoveredState>>,
 }
 
 pub async fn start(
@@ -42,11 +43,12 @@ pub async fn start(
     log_handle:  LogHandle,
     db:          Option<PgPool>,
     assets:      Arc<LocalStore>,
+    discovered:  Arc<RwLock<DiscoveredState>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState { ingested, plant, tick_ms, log_handle, db, assets };
+    let state = AppState { ingested, plant, tick_ms, log_handle, db, assets, discovered };
 
     let app = Router::new()
-        // Legacy / real-time
+        // Real-time
         .route("/ws",            get(ws_handler))
         .route("/api/plant",     get(plant_handler))
         .route("/api/log-level", get(log_level_handler))
@@ -62,7 +64,7 @@ pub async fn start(
         // Device instances (per PLC)
         .route("/api/plcs/:plc_id/instances",     get(list_instances).post(create_instance))
         .route("/api/plcs/:plc_id/instances/:id", delete(delete_instance))
-        // Discovered nodes (per PLC — filled in by Phase 2)
+        // Discovered nodes (per PLC — populated by browse after each connect)
         .route("/api/plcs/:plc_id/discovered", get(list_discovered))
         // Wires
         .route("/api/wires",     get(list_wires).post(create_wire))
@@ -161,7 +163,7 @@ async fn list_instances(
     State(s): State<AppState>,
 ) -> Result<Json<Vec<models::DeviceInstance>>, (StatusCode, String)> {
     let pool = db_required(&s.db)?;
-    queries::list_instances_for_plc(pool, plc_id).await.map(Json).map_err(db_err)
+    queries::list_device_instances_for_plc(pool, plc_id).await.map(Json).map_err(db_err)
 }
 
 async fn create_instance(
@@ -170,7 +172,7 @@ async fn create_instance(
     Json(req): Json<models::CreateDeviceInstance>,
 ) -> Result<(StatusCode, Json<models::DeviceInstance>), (StatusCode, String)> {
     let pool = db_required(&s.db)?;
-    let inst = queries::create_instance(pool, &req).await.map_err(db_err)?;
+    let inst = queries::create_device_instance(pool, &req).await.map_err(db_err)?;
     Ok((StatusCode::CREATED, Json(inst)))
 }
 
@@ -179,20 +181,38 @@ async fn delete_instance(
     State(s): State<AppState>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let pool = db_required(&s.db)?;
-    let n = queries::delete_instance(pool, id).await.map_err(db_err)?;
+    let n = queries::delete_device_instance(pool, id).await.map_err(db_err)?;
     if n == 0 { Err((StatusCode::NOT_FOUND, "not found".into())) } else { Ok(StatusCode::NO_CONTENT) }
 }
 
 // ============================================================================
-// Discovered nodes
+// Discovered nodes — served from in-memory browse cache.
+// UUID→name lookup via DB when available; falls back to matching plant config name.
 // ============================================================================
 
 async fn list_discovered(
     Path(plc_id): Path<Uuid>,
     State(s): State<AppState>,
-) -> Result<Json<Vec<models::DiscoveredNode>>, (StatusCode, String)> {
-    let pool = db_required(&s.db)?;
-    queries::list_discovered_nodes(pool, plc_id).await.map(Json).map_err(db_err)
+) -> Result<Json<Vec<BrowsedNode>>, (StatusCode, String)> {
+    // Resolve PLC name from UUID.
+    let plc_name: Option<String> = if let Some(pool) = &s.db {
+        sqlx::query_as::<_, (String,)>("SELECT name FROM plcs WHERE id = $1")
+            .bind(plc_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(db_err)?
+            .map(|(n,)| n)
+    } else {
+        // No DB — try to find in plant config by matching the UUID string in the plc_id field.
+        // (plant_config plc_id is like "plc-001", not a UUID, so this path returns None unless
+        // the user supplied a name-based UUID; Phase 5 will make this authoritative.)
+        None
+    };
+
+    let name = plc_name.ok_or_else(|| (StatusCode::NOT_FOUND, format!("PLC {} not found", plc_id)))?;
+    let map  = s.discovered.read().await;
+    let nodes = map.get(&name).cloned().unwrap_or_default();
+    Ok(Json(nodes))
 }
 
 // ============================================================================
@@ -226,18 +246,13 @@ async fn delete_wire(
 // Legacy / real-time handlers
 // ============================================================================
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> Response {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| async move {
         stream_state(socket, state.ingested, state.tick_ms).await
     })
 }
 
-async fn plant_handler(
-    State(state): State<AppState>,
-) -> Json<PlantConfig> {
+async fn plant_handler(State(state): State<AppState>) -> Json<PlantConfig> {
     Json(state.plant.config.clone())
 }
 

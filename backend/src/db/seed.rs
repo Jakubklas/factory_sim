@@ -39,9 +39,11 @@ pub async fn seed_if_configured(pool: &PgPool) -> Result<(), Box<dyn std::error:
     tracing::info!("[seed] DB is empty — seeding from {}", seed_dir);
     let dir = Path::new(&seed_dir);
 
+    // Order matters: deploy_nodes must exist before plcs (plcs.deploy_node is a FK
+    // into deploy_nodes), and device_types before instances.
+    seed_deploy_nodes(pool, dir).await?;
     seed_device_types(pool, dir).await?;
     seed_plcs_and_instances(pool, dir).await?;
-    seed_deploy_nodes(pool, dir).await?;
 
     tracing::info!("[seed] Seed complete");
     Ok(())
@@ -108,6 +110,12 @@ async fn seed_plcs_and_instances(pool: &PgPool, dir: &Path) -> Result<(), Box<dy
         }
     };
 
+    // device_id → owning PLC uuid, and device_id → instance uuid.
+    // Built during the instance pass, used afterwards to seed wires (whose source
+    // device may live on a different PLC).
+    let mut device_to_plc:      std::collections::HashMap<String, uuid::Uuid> = std::collections::HashMap::new();
+    let mut device_to_instance: std::collections::HashMap<String, uuid::Uuid> = std::collections::HashMap::new();
+
     for plc in &plcs {
         let kind = if plc.simulated { PlcKind::Simulated } else { PlcKind::Real };
         let db_plc = upsert_plc(
@@ -134,7 +142,7 @@ async fn seed_plcs_and_instances(pool: &PgPool, dir: &Path) -> Result<(), Box<dy
             };
 
             let param_values = serde_json::to_value(&dev.params)?;
-            upsert_device_instance(
+            let inst = upsert_device_instance(
                 pool,
                 db_plc.id,
                 dt.id,
@@ -142,7 +150,38 @@ async fn seed_plcs_and_instances(pool: &PgPool, dir: &Path) -> Result<(), Box<dy
                 &dev.name,
                 param_values,
             ).await?;
+            device_to_plc.insert(dev.device_id.clone(), db_plc.id);
+            device_to_instance.insert(dev.device_id.clone(), inst.id);
             tracing::debug!("[seed] instance: {}.{}", plc.name, dev.name);
+        }
+    }
+
+    // Second pass: turn each device's input_variables into wire rows. Done after all
+    // instances exist so cross-PLC sources resolve.
+    for plc in &plcs {
+        for dev in &plc.devices {
+            let Some(&dst_instance_id) = device_to_instance.get(&dev.device_id) else { continue };
+            for input in &dev.input_variables {
+                let Some(&src_plc_id) = device_to_plc.get(&input.source_device_id) else {
+                    tracing::warn!(
+                        "[seed] Wire for '{}.{}' references unknown source device '{}' — skipping",
+                        dev.device_id, input.name, input.source_device_id
+                    );
+                    continue;
+                };
+                super::queries::upsert_wire(
+                    pool,
+                    src_plc_id,
+                    &input.source_device_id,
+                    &input.source_field,
+                    dst_instance_id,
+                    &input.name,
+                ).await?;
+                tracing::debug!(
+                    "[seed] wire: {}.{} → {}.{}",
+                    input.source_device_id, input.source_field, dev.device_id, input.name
+                );
+            }
         }
     }
     Ok(())

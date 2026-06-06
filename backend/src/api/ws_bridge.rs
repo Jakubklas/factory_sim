@@ -97,6 +97,24 @@ fn db_required(db: &Option<PgPool>) -> Result<&PgPool, (StatusCode, String)> {
 }
 
 fn db_err(e: sqlx::Error) -> (StatusCode, String) {
+    // Map well-known constraint violations to 409 with a clean message rather than
+    // leaking the raw SQL error as a 500.
+    if let Some(dbe) = e.as_database_error() {
+        match dbe.code().as_deref() {
+            // foreign_key_violation — e.g. deleting a device type still in use,
+            // or referencing a row that doesn't exist.
+            Some("23503") => return (
+                StatusCode::CONFLICT,
+                "operation violates a foreign-key constraint — the record is still referenced, or a referenced record is missing".into(),
+            ),
+            // unique_violation — e.g. duplicate name/slug.
+            Some("23505") => return (
+                StatusCode::CONFLICT,
+                "a record with these unique fields already exists".into(),
+            ),
+            _ => {}
+        }
+    }
     tracing::error!("DB error: {}", e);
     (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
 }
@@ -177,21 +195,26 @@ async fn list_instances(
 }
 
 async fn create_instance(
-    Path(_plc_id): Path<Uuid>,
+    Path(plc_id): Path<Uuid>,
     State(s): State<AppState>,
-    Json(req): Json<models::CreateDeviceInstance>,
+    Json(mut req): Json<models::CreateDeviceInstance>,
 ) -> Result<(StatusCode, Json<models::DeviceInstance>), (StatusCode, String)> {
     let pool = db_required(&s.db)?;
+    // The URL is authoritative for the parent PLC: a request to
+    // /api/plcs/{A}/instances can only create an instance on PLC A, regardless of
+    // any plc_id in the body.
+    req.plc_id = plc_id;
     let inst = queries::create_device_instance(pool, &req).await.map_err(db_err)?;
     Ok((StatusCode::CREATED, Json(inst)))
 }
 
 async fn delete_instance(
-    Path((_plc_id, id)): Path<(Uuid, Uuid)>,
+    Path((plc_id, id)): Path<(Uuid, Uuid)>,
     State(s): State<AppState>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let pool = db_required(&s.db)?;
-    let n = queries::delete_device_instance(pool, id).await.map_err(db_err)?;
+    // Scope the delete to the PLC in the URL — you can't delete another PLC's instance.
+    let n = queries::delete_device_instance_for_plc(pool, plc_id, id).await.map_err(db_err)?;
     if n == 0 { Err((StatusCode::NOT_FOUND, "not found".into())) } else { Ok(StatusCode::NO_CONTENT) }
 }
 

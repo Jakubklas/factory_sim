@@ -204,6 +204,14 @@ pub async fn delete_device_instance(pool: &PgPool, id: Uuid) -> sqlx::Result<u64
         .bind(id).execute(pool).await?.rows_affected())
 }
 
+/// Delete an instance only if it belongs to the given PLC. Returns 0 rows if the
+/// instance doesn't exist or is owned by a different PLC (so the URL :plc_id is
+/// authoritative and can't be used to reach another PLC's instances).
+pub async fn delete_device_instance_for_plc(pool: &PgPool, plc_id: Uuid, id: Uuid) -> sqlx::Result<u64> {
+    Ok(sqlx::query("DELETE FROM device_instances WHERE id = $1 AND plc_id = $2")
+        .bind(id).bind(plc_id).execute(pool).await?.rows_affected())
+}
+
 pub async fn upsert_device_instance(
     pool:           &PgPool,
     plc_uuid:       Uuid,
@@ -251,6 +259,27 @@ pub async fn create_wire(pool: &PgPool, req: &CreateWire) -> sqlx::Result<Wire> 
 pub async fn delete_wire(pool: &PgPool, id: Uuid) -> sqlx::Result<u64> {
     Ok(sqlx::query("DELETE FROM wires WHERE id = $1")
         .bind(id).execute(pool).await?.rows_affected())
+}
+
+/// Insert a wire if one doesn't already target the same (dst_instance_id, dst_input_port).
+/// Used by the seeder to import plant.json's input_variables.
+pub async fn upsert_wire(
+    pool:            &PgPool,
+    src_plc_id:      Uuid,
+    src_device_id:   &str,
+    src_field:       &str,
+    dst_instance_id: Uuid,
+    dst_input_port:  &str,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO wires (src_plc_id, src_device_id, src_field, dst_instance_id, dst_input_port)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (dst_instance_id, dst_input_port) DO NOTHING"
+    )
+    .bind(src_plc_id).bind(src_device_id).bind(src_field)
+    .bind(dst_instance_id).bind(dst_input_port)
+    .execute(pool).await?;
+    Ok(())
 }
 
 // ============================================================================

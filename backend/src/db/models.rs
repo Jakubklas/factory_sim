@@ -28,6 +28,7 @@ pub struct DeviceType {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::Type, PartialEq)]
 #[sqlx(type_name = "plc_kind", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
 pub enum PlcKind {
     Simulated,
     Real,

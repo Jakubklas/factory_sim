@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 use async_trait::async_trait;
 use serde::{Serialize, Deserialize};
 use plant_config::DataType;
@@ -23,41 +23,75 @@ pub struct BrowsedNode {
 /// Shared discovered state: PLC name → browsed nodes. Updated after every (re)connect.
 pub type DiscoveredState = HashMap<String, Vec<BrowsedNode>>;
 
+/// A write command delivered to a connector's inbound queue.
+#[derive(Debug, Clone)]
+pub struct WriteCmd {
+    pub node_id: String,
+    pub value:   DataType,
+}
+
+/// Handle to a connector's write queue. Clone freely — cheap Arc clone.
+#[derive(Clone)]
+pub struct WriteHandle {
+    tx: mpsc::Sender<WriteCmd>,
+}
+
+impl WriteHandle {
+    /// Enqueue a write. Non-blocking; drops the command if the queue is full.
+    pub fn send(&self, cmd: WriteCmd) {
+        let _ = self.tx.try_send(cmd);
+    }
+}
+
 /// Implement this to add a new protocol.
-/// connect() makes a single attempt; GenericConnector handles retry.
-/// browse() is called once after each successful connect to discover the address space.
-/// poll() is called every tick to read current values.
 #[async_trait]
 pub trait ConnectorImpl: Send + Sync + 'static {
     type Conn: Send + Sync + 'static;
+
+    /// Make a single connection attempt. GenericConnector retries on error.
     async fn connect(&self) -> Result<Self::Conn, Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Browse the address space once after connect. Returns discovered nodes and
+    /// rebuilds the internal poll list. Called again on every reconnect.
     async fn browse(&self, conn: &Self::Conn) -> Result<Vec<BrowsedNode>, Box<dyn std::error::Error + Send + Sync>>;
-    /// Return Err if the connection is broken — triggers reconnect in GenericConnector.
+
+    /// Write a value to a node. Called before poll() each tick.
+    async fn write(&self, conn: &Self::Conn, cmd: &WriteCmd) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Read current values from all browsed variable nodes.
     async fn poll(&self, conn: &Self::Conn) -> Result<PartialState, Box<dyn std::error::Error + Send + Sync>>;
 }
 
-/// One tokio task per connector. Runs connect → browse → poll loop.
+/// One tokio task per connector. Runs connect → browse → (drain writes → poll) loop.
 pub struct GenericConnector<C: ConnectorImpl> {
     name:         String,
     impl_:        C,
     tick_ms:      u64,
     ingested:     Arc<RwLock<IngestedState>>,
     discovered:   Arc<RwLock<DiscoveredState>>,
+    write_rx:     mpsc::Receiver<WriteCmd>,
     backoff_secs: &'static [u64],
 }
 
 impl<C: ConnectorImpl> GenericConnector<C> {
+    /// Returns `(connector, write_handle)`. The caller keeps the handle to enqueue writes.
     pub fn new(
         name:       impl Into<String>,
         impl_:      C,
         tick_ms:    u64,
         ingested:   Arc<RwLock<IngestedState>>,
         discovered: Arc<RwLock<DiscoveredState>>,
-    ) -> Self {
-        Self { name: name.into(), impl_, tick_ms, ingested, discovered, backoff_secs: &[1, 2, 4, 8, 16, 30] }
+    ) -> (Self, WriteHandle) {
+        let (tx, rx) = mpsc::channel(256);
+        let connector = Self {
+            name: name.into(), impl_, tick_ms, ingested, discovered,
+            write_rx: rx, backoff_secs: &[1, 2, 4, 8, 16, 30],
+        };
+        (connector, WriteHandle { tx })
     }
 
-    pub fn start(self) {
+    /// Consume the connector, spawning its run loop as a tokio task.
+    pub fn spawn(self) {
         tokio::spawn(async move { self.run().await });
     }
 
@@ -96,7 +130,7 @@ impl<C: ConnectorImpl> GenericConnector<C> {
         }
     }
 
-    async fn run(self) {
+    async fn run(mut self) {
         let mut conn = self.connect_with_backoff().await;
         self.do_browse(&conn).await;
 
@@ -106,6 +140,13 @@ impl<C: ConnectorImpl> GenericConnector<C> {
 
         loop {
             tokio::time::sleep(Duration::from_millis(self.tick_ms)).await;
+
+            // Drain the write queue before reading — ensures setpoints land before next poll.
+            while let Ok(cmd) = self.write_rx.try_recv() {
+                if let Err(e) = self.impl_.write(&conn, &cmd).await {
+                    tracing::warn!("Connector '{}' write '{}' failed: {}", self.name, cmd.node_id, e);
+                }
+            }
 
             match self.impl_.poll(&conn).await {
                 Ok(partial) => {
@@ -150,7 +191,7 @@ impl<C: ConnectorImpl> GenericConnector<C> {
                     consecutive_failures += 1;
                     let delay = self.backoff_secs[consecutive_failures.min(self.backoff_secs.len() - 1)];
                     tracing::warn!(
-                        "Connector '{}' poll failed (attempt {}) — waiting {}s before reconnect: {}",
+                        "Connector '{}' poll failed (attempt {}) — waiting {}s: {}",
                         self.name, consecutive_failures, delay, e
                     );
                     tokio::time::sleep(Duration::from_secs(delay)).await;

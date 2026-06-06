@@ -1,15 +1,17 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use plant_config::ResolvedPlant;
 
-use crate::comms::{DiscoveredState, GenericConnector, IngestedState, ScadaPlcConnector};
+use crate::comms::{DiscoveredState, GenericConnector, IngestedState, ScadaPlcConnector, WriteHandle};
 
-/// Start one connector per PLC. Returns the shared ingested-state and discovered-state maps.
+/// Start one connector per PLC.
+/// Returns the shared ingested-state, discovered-state, and a write handle per PLC name.
 pub async fn start(
     plant:      Arc<ResolvedPlant>,
     tick_ms:    u64,
     discovered: Arc<RwLock<DiscoveredState>>,
-) -> Result<Arc<RwLock<IngestedState>>, Box<dyn std::error::Error>> {
+) -> Result<(Arc<RwLock<IngestedState>>, HashMap<String, WriteHandle>), Box<dyn std::error::Error>> {
     let plcs          = &plant.config.plcs;
     let mut endpoints = plant.endpoint_configs();
 
@@ -40,23 +42,26 @@ pub async fn start(
     msg.push('\n');
     tracing::info!("{}", msg);
 
-    let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(std::collections::HashMap::new()));
+    let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(HashMap::new()));
+    let mut write_handles: HashMap<String, WriteHandle> = HashMap::new();
 
     for endpoint in endpoints {
         match endpoint.protocol.as_str() {
             "opcua" => {
                 let (name, connector) = ScadaPlcConnector::from_endpoint_config(endpoint);
-                GenericConnector::new(
-                    name, connector, tick_ms,
+                let (generic, handle) = GenericConnector::new(
+                    name.clone(), connector, tick_ms,
                     Arc::clone(&ingested),
                     Arc::clone(&discovered),
-                ).start();
+                );
+                write_handles.insert(name, handle);
+                generic.spawn();
             }
             other => tracing::warn!("Skipping '{}': unknown protocol '{}'", endpoint.name, other),
         }
     }
 
-    Ok(ingested)
+    Ok((ingested, write_handles))
 }
 
 fn rewrite_host(url: &str, host: &str) -> String {

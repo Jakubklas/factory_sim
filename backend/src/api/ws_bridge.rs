@@ -17,35 +17,40 @@ use plant_config::{ResolvedPlant, PlantConfig};
 use sqlx::PgPool;
 
 use crate::assets::LocalStore;
-use crate::comms::{BrowsedNode, DiscoveredState, IngestedState};
+use crate::comms::{BrowsedNode, DiscoveredState, IngestedState, WriteCmd, WriteHandle};
 use crate::db::{models, queries};
 
 type LogHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
 
 #[derive(Clone)]
 struct AppState {
-    ingested:    Arc<RwLock<IngestedState>>,
-    plant:       Arc<ResolvedPlant>,
-    tick_ms:     u64,
-    log_handle:  LogHandle,
-    db:          Option<PgPool>,
+    ingested:      Arc<RwLock<IngestedState>>,
+    plant:         Arc<ResolvedPlant>,
+    tick_ms:       u64,
+    log_handle:    LogHandle,
+    db:            Option<PgPool>,
     #[allow(dead_code)]
-    assets:      Arc<LocalStore>,
-    discovered:  Arc<RwLock<DiscoveredState>>,
+    assets:        Arc<LocalStore>,
+    discovered:    Arc<RwLock<DiscoveredState>>,
+    write_handles: Arc<std::collections::HashMap<String, WriteHandle>>,
 }
 
 pub async fn start(
-    ingested:    Arc<RwLock<IngestedState>>,
-    plant:       Arc<ResolvedPlant>,
-    tick_ms:     u64,
-    host:        &str,
-    port:        u16,
-    log_handle:  LogHandle,
-    db:          Option<PgPool>,
-    assets:      Arc<LocalStore>,
-    discovered:  Arc<RwLock<DiscoveredState>>,
+    ingested:      Arc<RwLock<IngestedState>>,
+    plant:         Arc<ResolvedPlant>,
+    tick_ms:       u64,
+    host:          &str,
+    port:          u16,
+    log_handle:    LogHandle,
+    db:            Option<PgPool>,
+    assets:        Arc<LocalStore>,
+    discovered:    Arc<RwLock<DiscoveredState>>,
+    write_handles: std::collections::HashMap<String, WriteHandle>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState { ingested, plant, tick_ms, log_handle, db, assets, discovered };
+    let state = AppState {
+        ingested, plant, tick_ms, log_handle, db, assets, discovered,
+        write_handles: Arc::new(write_handles),
+    };
 
     let app = Router::new()
         // Real-time
@@ -66,6 +71,8 @@ pub async fn start(
         .route("/api/plcs/:plc_id/instances/:id", delete(delete_instance))
         // Discovered nodes (per PLC — populated by browse after each connect)
         .route("/api/plcs/:plc_id/discovered", get(list_discovered))
+        // Setpoint write
+        .route("/api/setpoint", axum::routing::post(write_setpoint))
         // Wires
         .route("/api/wires",     get(list_wires).post(create_wire))
         .route("/api/wires/:id", delete(delete_wire))
@@ -213,6 +220,39 @@ async fn list_discovered(
     let map  = s.discovered.read().await;
     let nodes = map.get(&name).cloned().unwrap_or_default();
     Ok(Json(nodes))
+}
+
+// ============================================================================
+// Setpoint write — POST /api/setpoint
+// Body: { "plc_name": "...", "node_id": "ns=2;s=...", "value": 42.0 }
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct SetpointRequest {
+    plc_name: String,
+    node_id:  String,
+    value:    serde_json::Value,
+}
+
+async fn write_setpoint(
+    State(s): State<AppState>,
+    Json(req): Json<SetpointRequest>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    use plant_config::DataType;
+
+    let value = match &req.value {
+        serde_json::Value::Number(n) => DataType::Float(n.as_f64().unwrap_or(0.0)),
+        serde_json::Value::Bool(b)   => DataType::Boolean(*b),
+        serde_json::Value::String(s) => DataType::Str(s.clone()),
+        other => return Err((StatusCode::BAD_REQUEST, format!("unsupported value type: {}", other))),
+    };
+
+    let handle = s.write_handles.get(&req.plc_name).ok_or_else(|| {
+        (StatusCode::NOT_FOUND, format!("no connector for PLC '{}'", req.plc_name))
+    })?;
+
+    handle.send(WriteCmd { node_id: req.node_id, value });
+    Ok(StatusCode::ACCEPTED)
 }
 
 // ============================================================================

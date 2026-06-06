@@ -9,9 +9,10 @@ use opcua::types::{
     DataValue, EndpointDescription, Identifier, MessageSecurityMode,
     NodeClass, NodeClassMask, NodeId, ObjectId, ReadValueId,
     ReferenceTypeId, TimestampsToReturn, UserTokenPolicy, Variant,
+    WriteValue,
 };
 use plant_config::DataType;
-use crate::comms::generic_connector::{BrowsedNode, ConnectorImpl, PartialState};
+use crate::comms::generic_connector::{BrowsedNode, ConnectorImpl, PartialState, WriteCmd};
 
 // ============================================================================
 // Connection handle
@@ -156,6 +157,33 @@ impl ConnectorImpl for ScadaPlcConnector {
         Ok(browsed)
     }
 
+    async fn write(&self, conn: &PlcConnection, cmd: &WriteCmd) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let node_id = NodeId::from_str(&cmd.node_id)
+            .map_err(|e| format!("invalid node_id '{}': {:?}", cmd.node_id, e))?;
+
+        let variant = datatype_to_variant(&cmd.value);
+
+        let results = conn.session
+            .write(&[WriteValue {
+                node_id,
+                attribute_id: AttributeId::Value as u32,
+                value: DataValue::new_now(variant),
+                ..Default::default()
+            }])
+            .await
+            .map_err(|e| format!("[{}] session.write failed: {:?}", self.plc_name, e))?;
+
+        if let Some(status) = results.into_iter().next() {
+            if status.is_bad() {
+                return Err(format!(
+                    "[{}] write '{}' returned bad status: {:?}",
+                    self.plc_name, cmd.node_id, status
+                ).into());
+            }
+        }
+        Ok(())
+    }
+
     async fn poll(&self, conn: &PlcConnection) -> Result<PartialState, Box<dyn std::error::Error + Send + Sync>> {
         let node_reads = self.node_reads.read().await.clone();
 
@@ -294,6 +322,14 @@ fn data_type_from_variant(v: &Variant) -> NodeDataType {
         }
     }
     NodeDataType::Float
+}
+
+fn datatype_to_variant(value: &DataType) -> Variant {
+    match value {
+        DataType::Float(f)   => Variant::Double(*f),
+        DataType::Str(s)     => Variant::String(s.clone().into()),
+        DataType::Boolean(b) => Variant::Boolean(*b),
+    }
 }
 
 fn extract_value(dv: &DataValue, data_type: &NodeDataType) -> Result<DataType, String> {

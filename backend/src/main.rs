@@ -59,20 +59,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
          http://{}/api/plant\n    \
          http://{}/api/device-types\n    \
          http://{}/api/plcs\n    \
+         http://{}/api/setpoint  (POST)\n    \
          http://{}/api/log-level?set=info\n",
-        addr, addr, addr, addr, addr, addr
+        addr, addr, addr, addr, addr, addr, addr
     );
 
-    let ingested = plant::start(plant.clone(), app.tick_ms, Arc::clone(&discovered)).await?;
+    let (ingested, write_handles) =
+        plant::start(plant.clone(), app.tick_ms, Arc::clone(&discovered)).await?;
 
-    let ingested_ws  = ingested.clone();
+    let ingested_ws   = ingested.clone();
     let discovered_ws = Arc::clone(&discovered);
-    let ws_host      = app.ws_host.clone();
+    let ws_host       = app.ws_host.clone();
 
     tokio::spawn(async move {
         if let Err(e) = api::ws_bridge::start(
             ingested_ws, plant, app.tick_ms, &ws_host, app.ws_port, log_handle,
-            db_pool, asset_store, discovered_ws,
+            db_pool, asset_store, discovered_ws, write_handles,
         ).await {
             tracing::error!("WS bridge error: {}", e);
         }

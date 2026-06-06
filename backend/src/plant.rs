@@ -1,23 +1,20 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use plant_config::{PlcConfig, PlantConfig, ResolvedPlant};
+use plant_config::{PlcConfig, PlantConfig};
 
 use crate::comms::{DiscoveredState, GenericConnector, IngestedState, ScadaPlcConnector, WriteHandle};
 
 pub type WriteHandles = Arc<RwLock<HashMap<String, WriteHandle>>>;
 
-/// Start one connector per PLC from the resolved plant.
+/// Start one connector per PLC from the plant config.
 /// Returns the shared ingested-state and a write-handle map (RwLock for dynamic insertion).
 pub async fn start(
-    plant:      Arc<ResolvedPlant>,
+    plant:      Arc<PlantConfig>,
     tick_ms:    u64,
     discovered: Arc<RwLock<DiscoveredState>>,
 ) -> Result<(Arc<RwLock<IngestedState>>, WriteHandles), Box<dyn std::error::Error>> {
-    let plcs      = &plant.config.plcs;
-    let mut endpoints = plant.endpoint_configs();
-
-    apply_uri_override(&mut endpoints);
+    let plcs = &plant.plcs;
 
     let sim_count  = plcs.iter().filter(|p| p.simulated).count();
     let live_count = plcs.len() - sim_count;
@@ -25,15 +22,16 @@ pub async fn start(
 
     let mut msg = format!(
         "\n  Plant: \"{}\"  ·  {} PLC{}  ({} simulated, {} live)  ·  {} device{}\n",
-        plant.config.name,
+        plant.name,
         plcs.len(), if plcs.len() == 1 { "" } else { "s" },
         sim_count, live_count,
         dev_count, if dev_count == 1 { "" } else { "s" },
     );
-    for (plc, endpoint) in plcs.iter().zip(endpoints.iter()) {
+    for plc in plcs {
         let tag     = if plc.simulated { "[sim] " } else { "[live]" };
+        let url     = format!("{}:{}{}", plc.endpoint_uri(), plc.port, plc.endpoint);
         let dev_ids: Vec<&str> = plc.devices.iter().map(|d| d.device_id.as_str()).collect();
-        msg.push_str(&format!("\n  {}  {:20}  {}\n", tag, plc.name, endpoint.url));
+        msg.push_str(&format!("\n  {}  {:20}  {}\n", tag, plc.name, url));
         msg.push_str(&format!("               {}\n", dev_ids.join(", ")));
     }
     msg.push('\n');
@@ -41,6 +39,9 @@ pub async fn start(
 
     let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(HashMap::new()));
     let handles:  WriteHandles               = Arc::new(RwLock::new(HashMap::new()));
+
+    let mut endpoints = plcs_to_endpoints(plcs);
+    apply_uri_override(&mut endpoints);
 
     for endpoint in endpoints {
         if let Some((name, handle)) = make_connector(endpoint, tick_ms, Arc::clone(&ingested), Arc::clone(&discovered)) {
@@ -64,18 +65,13 @@ pub async fn add_plc_connector(
         return;
     }
 
-    // Compute endpoint URL using a single-PLC PlantConfig + the shared logic.
-    let pseudo_plant = PlantConfig {
-        plant_id:    "tmp".into(),
-        name:        "tmp".into(),
-        description: String::new(),
-        plcs:        vec![plc.clone()],
-    };
-    let mut endpoints = match ResolvedPlant::build(pseudo_plant, vec![]) {
-        Ok(rp)  => rp.endpoint_configs(),
-        Err(e)  => { tracing::warn!("[plant] Cannot resolve PLC '{}': {}", plc.name, e); return; }
-    };
-
+    let url = format!("{}:{}{}", plc.endpoint_uri(), plc.port, plc.endpoint);
+    let mut endpoints = vec![plant_config::PlcEndpointConfig {
+        name:       plc.name.clone(),
+        protocol:   plc.protocol.clone(),
+        url,
+        node_reads: vec![],
+    }];
     apply_uri_override(&mut endpoints);
 
     for endpoint in endpoints {
@@ -89,6 +85,17 @@ pub async fn add_plc_connector(
 // ============================================================================
 // Internal helpers
 // ============================================================================
+
+fn plcs_to_endpoints(plcs: &[PlcConfig]) -> Vec<plant_config::PlcEndpointConfig> {
+    plcs.iter().map(|plc| {
+        plant_config::PlcEndpointConfig {
+            name:       plc.name.clone(),
+            protocol:   plc.protocol.clone(),
+            url:        format!("{}:{}{}", plc.endpoint_uri(), plc.port, plc.endpoint),
+            node_reads: vec![],
+        }
+    }).collect()
+}
 
 fn make_connector(
     endpoint:   plant_config::PlcEndpointConfig,

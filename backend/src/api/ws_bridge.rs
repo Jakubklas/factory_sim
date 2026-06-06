@@ -13,7 +13,7 @@ use axum::{
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{EnvFilter, reload};
 use uuid::Uuid;
-use plant_config::{ResolvedPlant, PlantConfig, DeviceTypeDefinition};
+use plant_config::{PlantConfig, DeviceTypeDefinition};
 use sqlx::PgPool;
 
 use crate::assets::LocalStore;
@@ -26,7 +26,7 @@ type LogHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
 #[derive(Clone)]
 struct AppState {
     ingested:      Arc<RwLock<IngestedState>>,
-    plant:         Arc<ResolvedPlant>,
+    plant:         Arc<PlantConfig>,
     tick_ms:       u64,
     log_handle:    LogHandle,
     db:            Option<PgPool>,
@@ -38,7 +38,7 @@ struct AppState {
 
 pub async fn start(
     ingested:      Arc<RwLock<IngestedState>>,
-    plant:         Arc<ResolvedPlant>,
+    plant:         Arc<PlantConfig>,
     tick_ms:       u64,
     host:          &str,
     port:          u16,
@@ -348,7 +348,7 @@ async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Resp
 }
 
 async fn plant_handler(State(state): State<AppState>) -> Json<PlantConfig> {
-    Json(state.plant.config.clone())
+    Json(state.plant.as_ref().clone())
 }
 
 async fn log_level_handler(

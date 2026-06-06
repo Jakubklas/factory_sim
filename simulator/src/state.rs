@@ -29,14 +29,17 @@ impl SimulatorState {
         Self { values }
     }
 
+    #[allow(dead_code)]
     pub fn get_field(&self, device_id: &str, field: &str) -> Option<&DataType> {
         self.values.get(device_id)?.get(field)
     }
 
+    #[allow(dead_code)]
     pub fn get_device_state(&self, device_id: &str) -> Option<&HashMap<FieldName, DataType>> {
         self.values.get(device_id)
     }
 
+    #[allow(dead_code)]
     pub fn set_field(&mut self, device_id: &str, field: &str, value: DataType) {
         if let Some(fields) = self.values.get_mut(device_id) {
             fields.insert(field.to_string(), value);

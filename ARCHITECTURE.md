@@ -4,6 +4,18 @@
 > toward, written as if already true. The builder implements against it; step-by-step status lives in the
 > plan (`deep-gathering-globe.md`), not here.
 
+---
+
+## Diagrams
+
+Interactive diagrams — open in the [Excalidraw VS Code extension](https://marketplace.visualstudio.com/items?itemName=pomdtr.excalidraw-editor) or drag-and-drop onto [excalidraw.com](https://excalidraw.com).
+
+| Diagram | File |
+|---|---|
+| System Architecture | [docs/diagrams/system-architecture.excalidraw](docs/diagrams/system-architecture.excalidraw) |
+| Runtime Data Flow | [docs/diagrams/data-flow.excalidraw](docs/diagrams/data-flow.excalidraw) |
+| Postgres Schema | [docs/diagrams/db-schema.excalidraw](docs/diagrams/db-schema.excalidraw) |
+
 An industrial-plant digital twin you **build and run at runtime**. You author *device types* (a physics
 model + inputs/outputs + a 3D look), assemble them into *PLCs* — simulated or real — place those on a
 floor, and wire any device's output to any other device's input. The **backend discovers every PLC over

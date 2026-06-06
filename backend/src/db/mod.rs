@@ -1,6 +1,7 @@
 pub mod models;
 pub mod queries;
 pub mod seed;
+pub mod plant_loader;
 
 use sqlx::PgPool;
 

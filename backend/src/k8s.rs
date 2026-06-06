@@ -9,22 +9,20 @@
 ///
 /// Also runs a node-sync loop that updates `deploy_nodes` from live k8s node labels.
 use std::collections::HashMap;
-use std::sync::Arc;
-use plant_config::ResolvedPlant;
 use sqlx::PgPool;
 
 const LABEL_MANAGED_BY: &str = "managed-by=factory-sim";
-const RECONCILE_INTERVAL_SECS: u64 = 30;
-const NODE_SYNC_INTERVAL_SECS: u64 = 60;
+const RECONCILE_INTERVAL_SECS: u64 = 15;
+const NODE_SYNC_INTERVAL_SECS: u64 = 30;
 
 /// Start the reconcile + node-sync tasks if `kubectl` is reachable (in-cluster).
 /// Silently skips if kubectl is unavailable — harmless outside a cluster.
+/// Reads desired PLC state from the DB, not the in-memory plant config.
 pub fn start(
-    plant:           Arc<ResolvedPlant>,
+    pool:            PgPool,
     simulator_image: String,
     backend_url:     String,
     namespace:       String,
-    db:              Option<PgPool>,
 ) {
     if !kubectl_available() {
         tracing::info!("[k8s] kubectl not found — skipping reconciler (not in-cluster?)");
@@ -34,10 +32,10 @@ pub fn start(
 
     // Reconcile loop
     {
-        let plant2    = Arc::clone(&plant);
-        let ns        = namespace.clone();
-        let image     = simulator_image.clone();
-        let be_url    = backend_url.clone();
+        let pool2   = pool.clone();
+        let ns      = namespace.clone();
+        let image   = simulator_image.clone();
+        let be_url  = backend_url.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(
@@ -45,7 +43,7 @@ pub fn start(
             );
             loop {
                 interval.tick().await;
-                if let Err(e) = reconcile(&plant2, &image, &be_url, &ns).await {
+                if let Err(e) = reconcile(&pool2, &image, &be_url, &ns).await {
                     tracing::warn!("[k8s] reconcile error: {}", e);
                 }
             }
@@ -54,7 +52,8 @@ pub fn start(
 
     // Node sync loop
     {
-        let ns2 = namespace.clone();
+        let pool2 = pool.clone();
+        let ns2   = namespace.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(
@@ -62,7 +61,7 @@ pub fn start(
             );
             loop {
                 interval.tick().await;
-                if let Err(e) = sync_nodes(&ns2, db.as_ref()).await {
+                if let Err(e) = sync_nodes(&ns2, Some(&pool2)).await {
                     tracing::warn!("[k8s] node-sync error: {}", e);
                 }
             }
@@ -75,22 +74,31 @@ pub fn start(
 // ============================================================================
 
 async fn reconcile(
-    plant:       &ResolvedPlant,
+    pool:        &PgPool,
     image:       &str,
     backend_url: &str,
     namespace:   &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Desired: all simulated PLCs from the plant config.
-    let desired: HashMap<String, DesiredPlc> = plant.config.plcs.iter()
-        .filter(|p| p.simulated)
+    // Desired: all simulated PLCs from the DB.
+    #[derive(sqlx::FromRow)]
+    struct PlcRow {
+        plc_id:      Option<String>,
+        name:        String,
+        deploy_node: Option<String>,
+    }
+
+    let plc_rows = sqlx::query_as::<_, PlcRow>(
+        "SELECT plc_id, name, deploy_node FROM plcs WHERE kind = 'simulated'"
+    ).fetch_all(pool).await?;
+
+    let desired: HashMap<String, DesiredPlc> = plc_rows.into_iter()
         .map(|p| {
-            let deploy_name = plc_deploy_name(&p.plc_id);
+            let slug        = p.plc_id.unwrap_or_else(|| slugify(&p.name));
+            let deploy_name = plc_deploy_name(&slug);
             (deploy_name.clone(), DesiredPlc {
-                plc_id:      p.plc_id.clone(),
-                name:        p.name.clone(),
-                port:        p.port,
+                plc_id:        slug,
                 deploy_name,
-                deploy_target: p.deploy_target.clone(),
+                deploy_target: p.deploy_node,
             })
         })
         .collect();
@@ -119,16 +127,23 @@ async fn reconcile(
 
 struct DesiredPlc {
     plc_id:        String,
-    name:          String,
-    port:          u16,
     deploy_name:   String,
     deploy_target: Option<String>,
 }
 
 fn plc_deploy_name(plc_id: &str) -> String {
-    // Keep the plc_id as the deploy name (e.g. "plc-001").
-    // Already a valid k8s name: lowercase alphanum + hyphens.
     plc_id.to_lowercase().replace('_', "-")
+}
+
+fn slugify(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 async fn list_managed_deployments(namespace: &str) -> Result<Vec<String>, Box<dyn std::error::Error + Send + Sync>> {

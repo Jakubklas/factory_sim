@@ -17,8 +17,9 @@ use plant_config::{ResolvedPlant, PlantConfig, DeviceTypeDefinition};
 use sqlx::PgPool;
 
 use crate::assets::LocalStore;
-use crate::comms::{BrowsedNode, DiscoveredState, IngestedState, WriteCmd, WriteHandle};
-use crate::db::{models, queries};
+use crate::comms::{BrowsedNode, DiscoveredState, IngestedState, WriteCmd};
+use crate::db::{models, queries, plant_loader};
+use crate::plant::WriteHandles;
 
 type LogHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
 
@@ -32,7 +33,7 @@ struct AppState {
     #[allow(dead_code)]
     assets:        Arc<LocalStore>,
     discovered:    Arc<RwLock<DiscoveredState>>,
-    write_handles: Arc<std::collections::HashMap<String, WriteHandle>>,
+    write_handles: WriteHandles,
 }
 
 pub async fn start(
@@ -45,7 +46,7 @@ pub async fn start(
     db:            Option<PgPool>,
     assets:        Arc<LocalStore>,
     discovered:    Arc<RwLock<DiscoveredState>>,
-    write_handles: Arc<std::collections::HashMap<String, WriteHandle>>,
+    write_handles: WriteHandles,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         ingested, plant, tick_ms, log_handle, db, assets, discovered,
@@ -242,47 +243,35 @@ struct SimConfigResponse {
 }
 
 async fn sim_config(
-    Path(plc_id): Path<String>,
+    Path(plc_id_str): Path<String>,
     State(s): State<AppState>,
 ) -> Result<Json<SimConfigResponse>, (StatusCode, String)> {
-    // Try to find the PLC in the loaded plant by plc_id string first.
-    // If a UUID was given, also try matching against DB name.
-    let plc = s.plant.config.plcs.iter()
-        .find(|p| p.plc_id == plc_id)
-        .cloned();
+    let pool = db_required(&s.db)?;
 
-    // If not found by plc_id, try DB name lookup (UUID → name → plc_id match).
-    let plc = if plc.is_none() {
-        if let Ok(uuid) = plc_id.parse::<uuid::Uuid>() {
-            if let Some(pool) = &s.db {
-                let row = sqlx::query_as::<_, (String,)>("SELECT name FROM plcs WHERE id = $1")
-                    .bind(uuid)
-                    .fetch_optional(pool)
-                    .await
-                    .map_err(db_err)?;
-                row.and_then(|(name,)| {
-                    s.plant.config.plcs.iter().find(|p| p.name == name).cloned()
-                })
-            } else { None }
-        } else { None }
-    } else { plc };
+    // Resolve to a UUID: accept either a UUID directly or a plc_id slug.
+    let plc_uuid: uuid::Uuid = if let Ok(uuid) = plc_id_str.parse::<uuid::Uuid>() {
+        uuid
+    } else {
+        sqlx::query_as::<_, (uuid::Uuid,)>("SELECT id FROM plcs WHERE plc_id = $1")
+            .bind(&plc_id_str)
+            .fetch_optional(pool)
+            .await
+            .map_err(db_err)?
+            .map(|(id,)| id)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("PLC '{}' not found", plc_id_str)))?
+    };
 
-    let plc = plc.ok_or_else(|| (StatusCode::NOT_FOUND, format!("PLC '{}' not found", plc_id)))?;
+    let result = plant_loader::load_plc_config(pool, plc_uuid)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let (plc, device_types) = result.ok_or_else(|| {
+        (StatusCode::NOT_FOUND, format!("PLC {} not found", plc_uuid))
+    })?;
 
     if !plc.simulated {
         return Err((StatusCode::BAD_REQUEST, "config endpoint is only for simulated PLCs".into()));
     }
-
-    // Collect unique device types referenced by this PLC's devices.
-    let plc_device_types: std::collections::HashSet<String> = plc.devices.iter()
-        .map(|d| d.device_type.clone())
-        .collect();
-    let mut seen = std::collections::HashSet::new();
-    let device_types: Vec<DeviceTypeDefinition> = s.plant.devices.iter()
-        .filter(|d| plc_device_types.contains(&d.type_def.device_type))
-        .filter(|d| seen.insert(d.type_def.device_type.clone()))
-        .map(|d| d.type_def.clone())
-        .collect();
 
     Ok(Json(SimConfigResponse { plc, device_types }))
 }
@@ -312,7 +301,8 @@ async fn write_setpoint(
         other => return Err((StatusCode::BAD_REQUEST, format!("unsupported value type: {}", other))),
     };
 
-    let handle = s.write_handles.get(&req.plc_name).ok_or_else(|| {
+    let handles = s.write_handles.read().await;
+    let handle = handles.get(&req.plc_name).ok_or_else(|| {
         (StatusCode::NOT_FOUND, format!("no connector for PLC '{}'", req.plc_name))
     })?;
 

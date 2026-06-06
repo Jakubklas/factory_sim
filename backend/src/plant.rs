@@ -1,26 +1,23 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use plant_config::ResolvedPlant;
+use plant_config::{PlcConfig, PlantConfig, ResolvedPlant};
 
 use crate::comms::{DiscoveredState, GenericConnector, IngestedState, ScadaPlcConnector, WriteHandle};
 
-/// Start one connector per PLC.
-/// Returns the shared ingested-state, discovered-state, and a write handle per PLC name.
+pub type WriteHandles = Arc<RwLock<HashMap<String, WriteHandle>>>;
+
+/// Start one connector per PLC from the resolved plant.
+/// Returns the shared ingested-state and a write-handle map (RwLock for dynamic insertion).
 pub async fn start(
     plant:      Arc<ResolvedPlant>,
     tick_ms:    u64,
     discovered: Arc<RwLock<DiscoveredState>>,
-) -> Result<(Arc<RwLock<IngestedState>>, HashMap<String, WriteHandle>), Box<dyn std::error::Error>> {
-    let plcs          = &plant.config.plcs;
+) -> Result<(Arc<RwLock<IngestedState>>, WriteHandles), Box<dyn std::error::Error>> {
+    let plcs      = &plant.config.plcs;
     let mut endpoints = plant.endpoint_configs();
 
-    let host_override = std::env::var("OPCUA_URI_OVERRIDE").ok().filter(|s| !s.is_empty());
-    if let Some(host) = &host_override {
-        for e in &mut endpoints {
-            e.url = rewrite_host(&e.url, host);
-        }
-    }
+    apply_uri_override(&mut endpoints);
 
     let sim_count  = plcs.iter().filter(|p| p.simulated).count();
     let live_count = plcs.len() - sim_count;
@@ -34,7 +31,7 @@ pub async fn start(
         dev_count, if dev_count == 1 { "" } else { "s" },
     );
     for (plc, endpoint) in plcs.iter().zip(endpoints.iter()) {
-        let tag = if plc.simulated { "[sim] " } else { "[live]" };
+        let tag     = if plc.simulated { "[sim] " } else { "[live]" };
         let dev_ids: Vec<&str> = plc.devices.iter().map(|d| d.device_id.as_str()).collect();
         msg.push_str(&format!("\n  {}  {:20}  {}\n", tag, plc.name, endpoint.url));
         msg.push_str(&format!("               {}\n", dev_ids.join(", ")));
@@ -43,25 +40,87 @@ pub async fn start(
     tracing::info!("{}", msg);
 
     let ingested: Arc<RwLock<IngestedState>> = Arc::new(RwLock::new(HashMap::new()));
-    let mut write_handles: HashMap<String, WriteHandle> = HashMap::new();
+    let handles:  WriteHandles               = Arc::new(RwLock::new(HashMap::new()));
 
     for endpoint in endpoints {
-        match endpoint.protocol.as_str() {
-            "opcua" => {
-                let (name, connector) = ScadaPlcConnector::from_endpoint_config(endpoint);
-                let (generic, handle) = GenericConnector::new(
-                    name.clone(), connector, tick_ms,
-                    Arc::clone(&ingested),
-                    Arc::clone(&discovered),
-                );
-                write_handles.insert(name, handle);
-                generic.spawn();
-            }
-            other => tracing::warn!("Skipping '{}': unknown protocol '{}'", endpoint.name, other),
+        if let Some((name, handle)) = make_connector(endpoint, tick_ms, Arc::clone(&ingested), Arc::clone(&discovered)) {
+            handles.write().await.insert(name, handle);
         }
     }
 
-    Ok((ingested, write_handles))
+    Ok((ingested, handles))
+}
+
+/// Start a connector for a single newly-added PLC.
+/// Called by the Postgres LISTEN loop when a new PLC row appears in the DB.
+pub async fn add_plc_connector(
+    plc:        &PlcConfig,
+    tick_ms:    u64,
+    ingested:   Arc<RwLock<IngestedState>>,
+    discovered: Arc<RwLock<DiscoveredState>>,
+    handles:    WriteHandles,
+) {
+    if handles.read().await.contains_key(&plc.name) {
+        return;
+    }
+
+    // Compute endpoint URL using a single-PLC PlantConfig + the shared logic.
+    let pseudo_plant = PlantConfig {
+        plant_id:    "tmp".into(),
+        name:        "tmp".into(),
+        description: String::new(),
+        plcs:        vec![plc.clone()],
+    };
+    let mut endpoints = match ResolvedPlant::build(pseudo_plant, vec![]) {
+        Ok(rp)  => rp.endpoint_configs(),
+        Err(e)  => { tracing::warn!("[plant] Cannot resolve PLC '{}': {}", plc.name, e); return; }
+    };
+
+    apply_uri_override(&mut endpoints);
+
+    for endpoint in endpoints {
+        tracing::info!("[plant] Adding connector for new PLC: {}", endpoint.name);
+        if let Some((name, handle)) = make_connector(endpoint, tick_ms, Arc::clone(&ingested), Arc::clone(&discovered)) {
+            handles.write().await.insert(name, handle);
+        }
+    }
+}
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+fn make_connector(
+    endpoint:   plant_config::PlcEndpointConfig,
+    tick_ms:    u64,
+    ingested:   Arc<RwLock<IngestedState>>,
+    discovered: Arc<RwLock<DiscoveredState>>,
+) -> Option<(String, WriteHandle)> {
+    match endpoint.protocol.as_str() {
+        "opcua" => {
+            let (name, connector) = ScadaPlcConnector::from_endpoint_config(endpoint);
+            let (generic, handle) = GenericConnector::new(
+                name.clone(), connector, tick_ms,
+                Arc::clone(&ingested),
+                Arc::clone(&discovered),
+            );
+            generic.spawn();
+            Some((name, handle))
+        }
+        other => {
+            tracing::warn!("Skipping '{}': unknown protocol '{}'", endpoint.name, other);
+            None
+        }
+    }
+}
+
+fn apply_uri_override(endpoints: &mut [plant_config::PlcEndpointConfig]) {
+    let Some(host) = std::env::var("OPCUA_URI_OVERRIDE").ok().filter(|s| !s.is_empty()) else {
+        return;
+    };
+    for e in endpoints {
+        e.url = rewrite_host(&e.url, &host);
+    }
 }
 
 fn rewrite_host(url: &str, host: &str) -> String {

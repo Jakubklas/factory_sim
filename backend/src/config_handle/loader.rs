@@ -4,6 +4,7 @@ use super::AppConfig;
 
 /// Load app config from env vars and plant topology from PLANT_CONFIG directory.
 /// Returns the app config and an immutable resolved plant.
+#[allow(dead_code)]
 pub fn load_all() -> Result<(AppConfig, Arc<ResolvedPlant>), Box<dyn std::error::Error>> {
     let app = AppConfig::from_env()?;
 

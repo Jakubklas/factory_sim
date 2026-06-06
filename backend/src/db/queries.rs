@@ -1,7 +1,5 @@
 #![allow(dead_code)]
-// Using the runtime query API (no macros) so we compile without a live DATABASE_URL.
-// Type-safety is enforced at the model layer via FromRow; SQL correctness is verified
-// by the migration test and integration tests against a real Postgres instance.
+// Runtime query API — no macros, so we compile without a live DATABASE_URL.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -29,9 +27,12 @@ pub async fn upsert_deploy_node(pool: &PgPool, node: &DeployNode) -> sqlx::Resul
         "INSERT INTO deploy_nodes (name, display_name, k8s_node, arch, mem_allocatable_mb, status, last_seen)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (name) DO UPDATE SET
-           display_name = EXCLUDED.display_name,
-           k8s_node     = EXCLUDED.k8s_node,
-           arch         = EXCLUDED.arch"
+           display_name       = EXCLUDED.display_name,
+           k8s_node           = EXCLUDED.k8s_node,
+           arch               = EXCLUDED.arch,
+           mem_allocatable_mb = EXCLUDED.mem_allocatable_mb,
+           status             = EXCLUDED.status,
+           last_seen          = EXCLUDED.last_seen"
     )
     .bind(&node.name).bind(&node.display_name).bind(&node.k8s_node)
     .bind(&node.arch).bind(node.mem_allocatable_mb).bind(&node.status).bind(node.last_seen)
@@ -45,14 +46,23 @@ pub async fn upsert_deploy_node(pool: &PgPool, node: &DeployNode) -> sqlx::Resul
 
 pub async fn list_device_types(pool: &PgPool) -> sqlx::Result<Vec<DeviceType>> {
     sqlx::query_as::<_, DeviceType>(
-        "SELECT id, name, physics_rhai, io_spec, model_ref, icon_ref, updated_at FROM device_types ORDER BY name"
+        "SELECT id, name, physics_rhai, io_spec, model_ref, icon_ref, updated_at
+         FROM device_types ORDER BY name"
     ).fetch_all(pool).await
 }
 
 pub async fn get_device_type(pool: &PgPool, id: Uuid) -> sqlx::Result<Option<DeviceType>> {
     sqlx::query_as::<_, DeviceType>(
-        "SELECT id, name, physics_rhai, io_spec, model_ref, icon_ref, updated_at FROM device_types WHERE id = $1"
+        "SELECT id, name, physics_rhai, io_spec, model_ref, icon_ref, updated_at
+         FROM device_types WHERE id = $1"
     ).bind(id).fetch_optional(pool).await
+}
+
+pub async fn get_device_type_by_name(pool: &PgPool, name: &str) -> sqlx::Result<Option<DeviceType>> {
+    sqlx::query_as::<_, DeviceType>(
+        "SELECT id, name, physics_rhai, io_spec, model_ref, icon_ref, updated_at
+         FROM device_types WHERE name = $1"
+    ).bind(name).fetch_optional(pool).await
 }
 
 pub async fn create_device_type(pool: &PgPool, req: &CreateDeviceType) -> sqlx::Result<DeviceType> {
@@ -70,16 +80,16 @@ pub async fn create_device_type(pool: &PgPool, req: &CreateDeviceType) -> sqlx::
 }
 
 pub async fn delete_device_type(pool: &PgPool, id: Uuid) -> sqlx::Result<u64> {
-    let res = sqlx::query("DELETE FROM device_types WHERE id = $1")
-        .bind(id).execute(pool).await?;
-    Ok(res.rows_affected())
+    Ok(sqlx::query("DELETE FROM device_types WHERE id = $1")
+        .bind(id).execute(pool).await?.rows_affected())
 }
 
-pub async fn upsert_device_type_by_name(
-    pool:    &PgPool,
-    name:    &str,
-    physics: &str,
-    io_spec: Value,
+/// Upsert by name. Stores the full DeviceTypeDefinition JSON in io_spec for round-tripping.
+pub async fn upsert_device_type(
+    pool:         &PgPool,
+    name:         &str,
+    physics_rhai: &str,
+    io_spec:      Value,
 ) -> sqlx::Result<DeviceType> {
     sqlx::query_as::<_, DeviceType>(
         "INSERT INTO device_types (name, physics_rhai, io_spec)
@@ -90,7 +100,7 @@ pub async fn upsert_device_type_by_name(
            updated_at   = NOW()
          RETURNING id, name, physics_rhai, io_spec, model_ref, icon_ref, updated_at"
     )
-    .bind(name).bind(physics).bind(io_spec)
+    .bind(name).bind(physics_rhai).bind(io_spec)
     .fetch_one(pool).await
 }
 
@@ -100,52 +110,66 @@ pub async fn upsert_device_type_by_name(
 
 pub async fn list_plcs(pool: &PgPool) -> sqlx::Result<Vec<Plc>> {
     sqlx::query_as::<_, Plc>(
-        "SELECT id, name, kind, deploy_node, endpoint_uri, port, updated_at FROM plcs ORDER BY name"
+        "SELECT id, plc_id, name, kind, deploy_node, endpoint_uri, port, protocol, endpoint, updated_at
+         FROM plcs ORDER BY name"
     ).fetch_all(pool).await
 }
 
 pub async fn get_plc(pool: &PgPool, id: Uuid) -> sqlx::Result<Option<Plc>> {
     sqlx::query_as::<_, Plc>(
-        "SELECT id, name, kind, deploy_node, endpoint_uri, port, updated_at FROM plcs WHERE id = $1"
+        "SELECT id, plc_id, name, kind, deploy_node, endpoint_uri, port, protocol, endpoint, updated_at
+         FROM plcs WHERE id = $1"
     ).bind(id).fetch_optional(pool).await
 }
 
 pub async fn create_plc(pool: &PgPool, req: &CreatePlc) -> sqlx::Result<Plc> {
+    let plc_id = req.plc_id.clone()
+        .unwrap_or_else(|| slugify(&req.name));
     sqlx::query_as::<_, Plc>(
-        "INSERT INTO plcs (name, kind, deploy_node, endpoint_uri, port)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, name, kind, deploy_node, endpoint_uri, port, updated_at"
+        "INSERT INTO plcs (plc_id, name, kind, deploy_node, endpoint_uri, port, protocol, endpoint)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, plc_id, name, kind, deploy_node, endpoint_uri, port, protocol, endpoint, updated_at"
     )
-    .bind(&req.name).bind(&req.kind).bind(&req.deploy_node).bind(&req.endpoint_uri).bind(req.port)
+    .bind(&plc_id).bind(&req.name).bind(&req.kind)
+    .bind(&req.deploy_node).bind(&req.endpoint_uri).bind(req.port)
+    .bind(req.protocol.as_deref().unwrap_or("opcua"))
+    .bind(req.endpoint.as_deref().unwrap_or("/"))
     .fetch_one(pool).await
 }
 
 pub async fn delete_plc(pool: &PgPool, id: Uuid) -> sqlx::Result<u64> {
-    let res = sqlx::query("DELETE FROM plcs WHERE id = $1")
-        .bind(id).execute(pool).await?;
-    Ok(res.rows_affected())
+    Ok(sqlx::query("DELETE FROM plcs WHERE id = $1")
+        .bind(id).execute(pool).await?.rows_affected())
 }
 
 pub async fn upsert_plc(
     pool:         &PgPool,
+    plc_id_slug:  &str,
     name:         &str,
     kind:         PlcKind,
     deploy_node:  Option<&str>,
     endpoint_uri: Option<&str>,
     port:         Option<i32>,
+    protocol:     &str,
+    endpoint:     &str,
 ) -> sqlx::Result<Plc> {
     sqlx::query_as::<_, Plc>(
-        "INSERT INTO plcs (name, kind, deploy_node, endpoint_uri, port)
-         VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO plcs (plc_id, name, kind, deploy_node, endpoint_uri, port, protocol, endpoint)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (name) DO UPDATE SET
+           plc_id       = EXCLUDED.plc_id,
            kind         = EXCLUDED.kind,
            deploy_node  = EXCLUDED.deploy_node,
            endpoint_uri = EXCLUDED.endpoint_uri,
            port         = EXCLUDED.port,
+           protocol     = EXCLUDED.protocol,
+           endpoint     = EXCLUDED.endpoint,
            updated_at   = NOW()
-         RETURNING id, name, kind, deploy_node, endpoint_uri, port, updated_at"
+         RETURNING id, plc_id, name, kind, deploy_node, endpoint_uri, port, protocol, endpoint, updated_at"
     )
-    .bind(name).bind(&kind).bind(deploy_node).bind(endpoint_uri).bind(port)
+    .bind(plc_id_slug).bind(name).bind(&kind)
+    .bind(deploy_node).bind(endpoint_uri).bind(port)
+    .bind(protocol).bind(endpoint)
     .fetch_one(pool).await
 }
 
@@ -155,45 +179,50 @@ pub async fn upsert_plc(
 
 pub async fn list_device_instances_for_plc(pool: &PgPool, plc_id: Uuid) -> sqlx::Result<Vec<DeviceInstance>> {
     sqlx::query_as::<_, DeviceInstance>(
-        "SELECT id, plc_id, device_type_id, name, param_values, floor_pos
+        "SELECT id, plc_id, device_type_id, device_id, name, param_values, floor_pos
          FROM device_instances WHERE plc_id = $1 ORDER BY name"
     ).bind(plc_id).fetch_all(pool).await
 }
 
 pub async fn create_device_instance(pool: &PgPool, req: &CreateDeviceInstance) -> sqlx::Result<DeviceInstance> {
+    let device_id = req.device_id.clone()
+        .unwrap_or_else(|| slugify(&req.name));
     sqlx::query_as::<_, DeviceInstance>(
-        "INSERT INTO device_instances (plc_id, device_type_id, name, param_values, floor_pos)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id, plc_id, device_type_id, name, param_values, floor_pos"
+        "INSERT INTO device_instances (plc_id, device_type_id, device_id, name, param_values, floor_pos)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, plc_id, device_type_id, device_id, name, param_values, floor_pos"
     )
-    .bind(req.plc_id).bind(req.device_type_id).bind(&req.name)
+    .bind(req.plc_id).bind(req.device_type_id)
+    .bind(&device_id).bind(&req.name)
     .bind(req.param_values.as_ref().cloned().unwrap_or_else(|| serde_json::json!({})))
     .bind(&req.floor_pos)
     .fetch_one(pool).await
 }
 
 pub async fn delete_device_instance(pool: &PgPool, id: Uuid) -> sqlx::Result<u64> {
-    let res = sqlx::query("DELETE FROM device_instances WHERE id = $1")
-        .bind(id).execute(pool).await?;
-    Ok(res.rows_affected())
+    Ok(sqlx::query("DELETE FROM device_instances WHERE id = $1")
+        .bind(id).execute(pool).await?.rows_affected())
 }
 
 pub async fn upsert_device_instance(
     pool:           &PgPool,
-    plc_id:         Uuid,
+    plc_uuid:       Uuid,
     device_type_id: Uuid,
+    device_id_slug: &str,
     name:           &str,
     param_values:   Value,
 ) -> sqlx::Result<DeviceInstance> {
     sqlx::query_as::<_, DeviceInstance>(
-        "INSERT INTO device_instances (plc_id, device_type_id, name, param_values)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO device_instances (plc_id, device_type_id, device_id, name, param_values)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (plc_id, name) DO UPDATE SET
            device_type_id = EXCLUDED.device_type_id,
+           device_id      = EXCLUDED.device_id,
            param_values   = EXCLUDED.param_values
-         RETURNING id, plc_id, device_type_id, name, param_values, floor_pos"
+         RETURNING id, plc_id, device_type_id, device_id, name, param_values, floor_pos"
     )
-    .bind(plc_id).bind(device_type_id).bind(name).bind(param_values)
+    .bind(plc_uuid).bind(device_type_id)
+    .bind(device_id_slug).bind(name).bind(param_values)
     .fetch_one(pool).await
 }
 
@@ -203,30 +232,25 @@ pub async fn upsert_device_instance(
 
 pub async fn list_wires(pool: &PgPool) -> sqlx::Result<Vec<Wire>> {
     sqlx::query_as::<_, Wire>(
-        "SELECT id, src_plc_id, src_node, dst_instance_id, dst_input_port FROM wires ORDER BY id"
+        "SELECT id, src_plc_id, src_device_id, src_field, dst_instance_id, dst_input_port
+         FROM wires ORDER BY id"
     ).fetch_all(pool).await
 }
 
 pub async fn create_wire(pool: &PgPool, req: &CreateWire) -> sqlx::Result<Wire> {
     sqlx::query_as::<_, Wire>(
-        "INSERT INTO wires (src_plc_id, src_node, dst_instance_id, dst_input_port)
-         VALUES ($1, $2, $3, $4)
-         RETURNING id, src_plc_id, src_node, dst_instance_id, dst_input_port"
+        "INSERT INTO wires (src_plc_id, src_device_id, src_field, dst_instance_id, dst_input_port)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, src_plc_id, src_device_id, src_field, dst_instance_id, dst_input_port"
     )
-    .bind(req.src_plc_id).bind(&req.src_node).bind(req.dst_instance_id).bind(&req.dst_input_port)
+    .bind(req.src_plc_id).bind(&req.src_device_id).bind(&req.src_field)
+    .bind(req.dst_instance_id).bind(&req.dst_input_port)
     .fetch_one(pool).await
 }
 
 pub async fn delete_wire(pool: &PgPool, id: Uuid) -> sqlx::Result<u64> {
-    let res = sqlx::query("DELETE FROM wires WHERE id = $1")
-        .bind(id).execute(pool).await?;
-    Ok(res.rows_affected())
-}
-
-pub async fn get_device_type_by_name(pool: &PgPool, name: &str) -> sqlx::Result<Option<DeviceType>> {
-    sqlx::query_as::<_, DeviceType>(
-        "SELECT id, name, physics_rhai, io_spec, model_ref, icon_ref, updated_at FROM device_types WHERE name = $1"
-    ).bind(name).fetch_optional(pool).await
+    Ok(sqlx::query("DELETE FROM wires WHERE id = $1")
+        .bind(id).execute(pool).await?.rows_affected())
 }
 
 // ============================================================================
@@ -255,4 +279,21 @@ pub async fn upsert_discovered_node(pool: &PgPool, node: &DiscoveredNode) -> sql
     .bind(&node.browse_name).bind(&node.datatype).bind(node.access_level)
     .execute(pool).await?;
     Ok(())
+}
+
+// ============================================================================
+// Helpers
+// ============================================================================
+
+/// Derive a URL-safe slug from a display name.
+/// "Heating PLC" → "heating-plc", "Main Boiler" → "main-boiler"
+fn slugify(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
 }

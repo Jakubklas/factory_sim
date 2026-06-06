@@ -1,501 +1,180 @@
 # Architecture
 
-Industrial-twin platform. A simulator emits OPC-UA telemetry indistinguishable from real PLCs; a backend polls it; a frontend renders it. Three processes, three deployable units, two network boundaries.
+> **North-star — present tense, target state (2026 H2).** This describes the system we are building
+> toward, written as if already true. The builder implements against it; step-by-step status lives in the
+> plan (`deep-gathering-globe.md`), not here.
+
+An industrial-plant digital twin you **build and run at runtime**. You author *device types* (a physics
+model + inputs/outputs + a 3D look), assemble them into *PLCs* — simulated or real — place those on a
+floor, and wire any device's output to any other device's input. The **backend discovers every PLC over
+OPC-UA and runs the plant**: it reads telemetry, routes wired values, writes setpoints, and spins up
+simulated PLCs on demand. Simulated and real PLCs are indistinguishable to it. Changing the plant is never
+a file edit or a redeploy — it happens live through the API.
 
 ---
 
-## Top-level
+## Principles (and why)
 
-```
-                       ┌──────────────────────┐
-                       │   config/   shared   │
-                       │   plant.json         │
-                       │   device_types.json  │
-                       └──────────┬───────────┘
-                                  │ read at startup
-              ┌───────────────────┴───────────────────┐
-              │                                       │
-        ┌─────▼─────┐    OPC-UA      ┌────────────┐
-        │ simulator │═════════╗      │  backend   │
-        │  plc-001  │  :4840  ╠═════>│            │
-        │ (1 PLC)   │         ║      │ connectors │
-        └───────────┘         ║      │ + WS API   │
-        ┌───────────┐         ║      │            │
-        │ simulator │═════════╝      └─────┬──────┘
-        │  plc-002  │  :4841                │ WS+HTTP
-        │ (1 PLC)   │                       │  :3001
-        └───────────┘                       ▼
-                                     ┌──────────┐
-                                     │ frontend │
-                                     │ three.js │ (REST /api/plant)
-                                     └──────────┘
-```
-
-**Why this shape.** OPC-UA is the boundary between "thing being measured" and "thing measuring it" — the same boundary a real PLC sits on. Each simulator process owns exactly one PLC, so cross-PLC physics wiring can't smuggle past the OPC-UA hop. Simulator and real plant are swappable; the backend never knows which one it's talking to.
+- **OPC-UA is the only boundary.** Every PLC — sim or real — speaks OPC-UA; the backend is always the
+  client. *Why:* a real PLC and a simulated one must be swappable with zero code difference.
+- **Discover, never assume.** The backend learns a PLC's devices and metrics only by **browsing** its live
+  address space — even for simulators. It never reads config to know what's on the wire. *Why:* the moment
+  the backend "knows" a sim's internals, sim and real stop being identical.
+- **The backend orchestrates; the edge does physics.** Physics runs inside the simulator (or in reality,
+  for a real PLC). The backend never computes physics — it reads outputs, writes inputs and setpoints.
+  *Why:* a real PLC runs its own behaviour; mirroring that keeps the twin honest.
+- **All wiring is uniform and backend-routed.** Every wire — same PLC or across PLCs — is read-then-written
+  by the backend each tick. *Why:* one mechanism, one consistent latency; lets you wire any device to any
+  device; keeps simulators dumb.
+- **Previous-tick step (Jacobi).** Every device reads *last* tick's inputs. *Why:* causality falls out of
+  the clock — a value travels one hop per tick, so series chains react in order and parallel branches react
+  together — with no dependency sorting and no cycle restriction (feedback loops just work).
+- **The plant lives in a database, not files.** Postgres holds the libraries, instances and wiring; an
+  object store holds 3D assets. *Why:* edit the plant live, with history; no redeploy.
+- **Simulated PLCs are provisioned on demand.** The backend creates and destroys their pods through the
+  Kubernetes API. *Why:* unlimited PLCs on a fixed set of nodes, bounded only by memory, created the
+  instant a user adds one.
 
 ---
 
-## The four crates
+## Shape
 
 ```
-┌─ plant_config ────────────────────────────────────┐
-│  Shared schema library. No tokio, no Arc, no      │
-│  state — just types and parsers.                  │
-│                                                   │
-│  primitives.rs   DataType, PhysicsMode, Function  │
-│  schema.rs       PlantConfig, PlcConfig, Device…  │
-│  resolved.rs     ResolvedPlant (merged + valid)   │
-│  loader.rs       JSON → typed structs             │
-│                                                   │
-│  exists because: BE & simulator parse the same    │
-│  JSON; shared schema keeps types in sync without  │
-│  sharing runtime state.                           │
-└───────────────────────────────────────────────────┘
-        ▲                          ▲
-        │ depends on               │ depends on
-        │                          │
-┌─ backend ──────────────┐  ┌─ simulator ──────────────┐
-│  API + connectors.     │  │  Physics + OPC-UA hosts. │
-│                        │  │                          │
-│  comms/                │  │  state.rs    Simulator-  │
-│   ScadaPlcConnector    │  │              State (priv)│
-│   GenericConnector     │  │  tick.rs     topo-sorted │
-│                        │  │              tick loop   │
-│  api/ws_bridge.rs      │  │  physics_…   rhai engine │
-│   /ws  /api/plant      │  │  server/     OPC-UA srv  │
-│   /api/log-level       │  │              per PLC     │
-│                        │  │                          │
-│  plant.rs              │  │  loader.rs   PLANT_CONFIG│
-│   spawn connector/PLC  │  │              + SIM_PLC_ID│
-│                        │  │                          │
-│  deployable alone?     │  │  deployable alone?       │
-│  YES — polls any       │  │  YES — exposes OPC-UA,   │
-│  reachable OPC-UA      │  │  needs nothing else      │
-└────────────────────────┘  └──────────────────────────┘
-
-┌─ codegen ─────────────────────────────────────────┐
-│  Deployment tooling only. Never runs in prod.     │
-│                                                   │
-│  src/bin/gen_helm_values.rs                       │
-│    reads plant.json + platform.json +             │
-│    inventory.json → writes values.yaml            │
-│    run via: just helm-gen                         │
-│                                                   │
-│  depends on plant_config (to parse plant.json)    │
-│  output is committed and consumed by Helm         │
-└───────────────────────────────────────────────────┘
+  ┌ Device Library ┐   ┌ PLC Library ┐   ┌ Floor / wiring ┐    persisted in Postgres + object store
+  │ physics · I/O  │ → │ sim or real │ → │ any → any wires│
+  └────────────────┘   └─────────────┘   └───────┬────────┘
+                                                  ▼
+                      ┌──────────── BACKEND (orchestrator) ───────────┐
+                      │ browse every PLC · read telemetry · route     │
+                      │ wires · write setpoints · provision sim pods  │
+                      └───┬───────────────────────────────┬───────────┘
+                 OPC-UA   │                               │ k8s API
+             ┌────────────▼───────────┐       ┌───────────▼──────────┐
+             │ sim PLC pods (dynamic) │       │ real PLCs (by URI)   │
+             │ inputs  = writable     │       │ browsed + written    │
+             │ outputs = read-only    │       └──────────────────────┘
+             └────────────────────────┘
+                      │ WebSocket (live state)
+                      ▼
+                   frontend (floor editor + 3D)
 ```
 
 ---
 
-## Config flow
+## The uniform tick
 
-`plant_config` is shared **schema**, not shared **state**. Both binaries read the JSON, build their own `Arc<ResolvedPlant>`, and never share it across the process boundary.
+How a value moves, every tick (default 100 ms, tunable):
 
-```
-  plant.json                     device_types.json
-  (topology: PLCs + devices)     (physics + metrics)
-        │                                │
-        └──────────────┬─────────────────┘
-                       │
-              ResolvedPlant::build()
-              (cross-reference + validate)
-                       │
-                       ▼
-            ┌──────────────────────────┐
-            │ ResolvedPlant            │
-            │  .config                 │
-            │  .devices: Vec<          │
-            │     ResolvedDevice {     │
-            │       config,            │
-            │       type_def           │
-            │     }                    │
-            │  .endpoint_configs() →   │
-            │     Vec<PlcEndpointCfg>  │
-            └────────┬────────┬────────┘
-                     │        │
-              ┌──────┘        └──────┐
-              ▼                      ▼
-       Arc<ResolvedPlant>     Arc<ResolvedPlant>
-       (in simulator)          (in backend)
-       seeds SimulatorState    builds connectors
-```
+1. **Read** — the backend polls each PLC's *browsed* output nodes into `IngestedState`.
+2. **Route** — for every wire, it writes the upstream value into the downstream device's **writable input
+   node** (the same write path setpoints use).
+3. **Step** — each simulator reads its input nodes, runs physics on the frozen previous-tick snapshot, and
+   writes its outputs. Order doesn't matter; a device with any unconnected input stays idle (**readiness
+   gate**).
+4. **Render** — the backend streams `IngestedState` to the frontend.
+
+A change crosses a chain at **one device per tick**, so end-to-end latency is `depth × tick` — shrink the
+tick for faster chains. (This is also truer to physics: pressure and flow take time to propagate.)
+
+**This makes the backend load-bearing for physics coupling, not just observation:** if it stalls, wired
+inputs freeze and devices go un-ready. That's the accepted cost of one uniform, honest data path.
 
 ---
 
-## Runtime data flow
+## Persistence & libraries
 
-The path of a single metric value from physics tick to browser:
+Postgres is the source of truth for everything the user builds; the object store holds binaries. Normalised
+tables (entities are reused and relationally wired) with JSONB for the schemaless parts.
 
 ```
-┌─────────── simulator process ──────────────────┐
-│                                                │
-│  ┌──────────┐  write  ┌──────────-───-─┐       │
-│  │ physics  ├────────>│ SimulatorState │       │
-│  │ (rhai)   │<────────┤   (private)    │       │
-│  └──────────┘  read   └───────┬───-───-┘       │
-│               inputs          │ snapshot       │
-│                               ▼                │
-│                        ┌──────────────┐        │
-│                        │ OPC-UA addr  │        │
-│                        │  space       │        │
-│                        └───────┬──────┘        │
-└────────────────────────────────┼───────────────┘
-                                 │
-                  · · · · · ·  TCP  · · · · · · · · ·
-                                 │
-┌────────────────────────────────┼───────────────┐
-│ backend process                ▼               │
-│                          ┌──────────────┐      │
-│                          │  Scada       │      │
-│                          │  Connector   │      │
-│                          │   .poll()    │      │
-│                          └───────┬──────┘      │
-│                                  │ upsert      │
-│                                  ▼             │
-│                          ┌─────────────-─┐     │
-│                          │ IngestedState │     │
-│                          └───────┬───-─-─┘     │
-│                                  │ snapshot    │
-│                                  ▼             │
-│                          ┌──────────────┐      │
-│                          │  WS bridge   │      │
-│                          │  /ws  send   │      │
-│                          └───────┬──────┘      │
-└──────────────────────────────────┼─────────────┘
-                                   │ JSON
-                                   ▼
-                                frontend
+deploy_nodes      finite cluster nodes a sim PLC can target — synced live from the k8s API
+device_types      physics (Rhai) + io_spec (JSONB: inputs/outputs/params) + model/icon refs
+plcs              sim (→ deploy_node) | real (→ endpoint_uri)
+device_instances  a device_type placed in a PLC, with param values
+wires             any output → any input (cross-PLC allowed)
+discovered_nodes  cache of each PLC's browsed address space
+audit_log         before/after history for rollback
 ```
 
-**Why two state stores** (SimulatorState + IngestedState) instead of one. Each lives on one side of the OPC-UA boundary. Simulator's is private and authoritative for simulated plants. Backend's is sourced from polling — identical to what it would see from a real PLC. Collapsing them would break the fidelity guarantee.
+- `deploy_nodes` mirrors the live cluster, so the PLC builder only offers real, Ready targets.
+- 3D assets start on a local PVC behind an `AssetStore` seam (`*_ref` = a key), swappable for S3 later
+  without touching callers. No binaries in Postgres.
 
 ---
 
-## Threading model
+## Simulators: dumb physics hosts
 
-Each binary mixes tokio (async event loops) with std threads (blocking work).
+A simulator is a leaf process that **builds itself** from `GET /api/plc/{id}/config` — its own instances +
+I/O — then exposes an OPC-UA server with read-only **output** nodes and writable **input** nodes. Each tick
+it reads inputs, runs Rhai physics, writes outputs. It owns no topology and knows nothing of other PLCs —
+the backend wires it. *(That config call is the sim's firmware, not backend discovery; the backend still
+browses the sim like any real PLC.)*
 
-| Process              | tokio tasks                       | std threads                |
-|----------------------|-----------------------------------|----------------------------|
-| simulator (per PLC)  | physics tick · OPC-UA AS updater  | one OPC-UA server          |
-| backend              | WS bridge · axum HTTP             | one connector per PLC      |
+---
 
-State-sharing primitives:
+## Dynamic provisioning
 
-```
-  Arc<ResolvedPlant>              read-only, no lock anywhere
-  Arc<RwLock<SimulatorState>>     physics writes, AS updater reads
-  Arc<RwLock<IngestedState>>      connectors write, WS bridge reads
-```
+Adding a simulated PLC writes a row in `plcs`; the backend's reconcile loop creates the Deployment +
+Service (and deletes them when the row goes), self-healing on restart. Each sim PLC is a ClusterIP
+`plc-<id>:4840` reached over the cluster network — no host ports, no per-PLC LoadBalancer. Real PLCs need
+no pod; the backend dials their URI.
 
 ---
 
 ## Deployment
 
-### Multi-node topology
-
-The stack spans two physical machines connected by Tailscale. k3s (lightweight Kubernetes) runs on both; Tailscale is the cluster network — flannel routes all pod-to-pod traffic through the encrypted Tailscale tunnel, so no cloud firewall rules are needed beyond Tailscale itself.
+k3s across a fixed set of machines (cloud + edge) joined by **Tailscale**, which doubles as the cluster
+network — flannel rides the encrypted tunnel, so no firewall ports are opened. The backend holds a
+tightly-scoped ServiceAccount to manage sim pods. Browser traffic reaches the frontend and backend through
+**Tailscale Funnel**.
 
 ```
-                    ┌─────────────────────────────────────────────┐
-                    │            PUBLIC INTERNET                  │
-                    │                                             │
-                    │   browser → :443 (frontend)                 │
-                    │   browser → :8443 (backend WebSocket)       │
-                    └───────────────────┬─────────────────────────┘
-                                        │ HTTPS
-                                        ▼
-                    ┌─────────────────────────────────────────────┐
-                    │         Tailscale Funnel (cloud relay)      │
-                    │  <node>.coat-augmented.ts.net               │
-                    │  terminates TLS, forwards plain HTTP        │
-                    │  :443  ──► node host :8080                  │
-                    │  :8443 ──► node host :3001                  │
-                    └───────────────────┬─────────────────────────┘
-                                        │ plain HTTP (to node)
-                                        │
-╔═══════════════════════════════════════╪═════════════════════════════════════════════════╗
-║  SERVER NODE  (k3s server + agent)   │                                                ║
-║  <node1>.coat_augmented.ts.net                                                         ║
-║                                       │                                                ║
-║  ┌─ ServiceLB (klipper-lb) ───────────┼────────────────────────────────────────-──┐    ║
-║  │  binds on host network — bridges   │  public/Tailscale traffic into pod network│    ║
-║  │                                    ▼                                           │    ║
-║  │   host :8080  ────────────────────────────────────► frontend pod :80           │    ║
-║  │   host :3001  ────────────────────────────────────► backend pod  :3001         │    ║
-║  └──────────────────────────────────────────────────────────────────────────────-─┘    ║
-║                                                                                        ║
-║  ┌─ frontend pod ──────────────────────────────────────────────────────────────────┐   ║
-║  │  nginx + React SPA                                                              │   ║
-║  │  BE_URL = https://<node1>.coat_augmented.ts.net:8443  (baked in at build time)  │   ║
-║  └──────────────────────────────────────────────────────────────────────────────-──┘   ║
-║                                                                                        ║
-║  ┌─ backend pod ───────────────────────────────────────────────────────────────────┐   ║
-║  │  axum HTTP + WebSocket · OPC-UA connectors (one thread per PLC)                 │   ║
-║  │                                                                                 │   ║
-║  │  plc-001 (same node) ──► svc/plc-001 ClusterIP :4840                        ─┐  │   ║
-║  │                          CoreDNS resolves "plc-001" inside the cluster       │  │   ║
-║  │                                                                              │  │   ║
-║  │  plc-002 (remote node) ──► <node2>.coat-augmented.ts.net:4841  ──► Tailscale ──┼──┼──╬──►
-║  └──────────────────────────────────────────────────────────────────────────────┼──┘   ║
-║                                                                                 │      ║
-║  ┌─ plc-001 pod ──────────────────────┐   ┌─ svc: plc-001 (ClusterIP) ──────┐  │      ║
-║  │  OPC-UA server · :4840             │◄──│  cluster-internal only           │◄─┘      ║
-║  │  not reachable outside cluster     │   │  no host port consumed           │         ║
-║  └────────────────────────────────────┘   └──────────────────────────────────┘         ║
-║                                                                                        ║
-╚══════════════════════════════ flannel VXLAN tunnel over Tailscale WireGuard ═══════════╝
-                                      │  encrypted · no open firewall ports
-                                      │
-╔═════════════════════════════════════╪═════════════════════════════════════════════════╗
-║  AGENT NODE           │                                                ║
-║  <node2>.your-tailnet.ts.net        │                                                ║
-║                                     ▼                                                ║
-║  ┌─ ServiceLB (klipper-lb) ────────────────────────────────────────────────────┐    ║
-║  │  binds on host network — exposes plc-002 OPC-UA port to the Tailscale VPN   │    ║
-║  │                                                                              │    ║
-║  │   host :4841  ────────────────────────────────────► plc-002 pod :4841        │    ║
-║  └──────────────────────────────────────────────────────────────────────────────┘    ║
-║                                                                                      ║
-║  ┌─ plc-002 pod ─────────────────────────────────────────────────────────────────┐   ║
-║  │  OPC-UA server · :4841                                                        │   ║
-║  │  reachable from backend via <node2>.your-tailnet.ts.net:4841                  │   ║
-║  └───────────────────────────────────────────────────────────────────────────────┘   ║
-║                                                                                      ║
-╚══════════════════════════════════════════════════════════════════════════════════════╝
+  browser ──HTTPS──► Tailscale Funnel ──► frontend (:443→8080)  ·  backend WS (:8443→3001)
+                                          │
+   ┌─ k3s, Tailscale-as-network ──────────┴────────────────────────────────────────┐
+   │  backend ·· Postgres ·· frontend        sim PLC pods (ClusterIP plc-*:4840)    │
+   │      └── browses/reads/writes ──────────► spread across nodes by deploy_node    │
+   └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-**Why k3s, not plain Docker Compose.** Compose requires SSH-ing into each machine and running commands manually. k3s gives a single control plane: `just helm-deploy` from a laptop reaches both machines simultaneously, workloads land on the right node automatically, and crashed pods restart without intervention.
+`just helm-deploy` installs the **platform** (backend, frontend, Postgres, RBAC). The **plant itself** is
+then built live through the API — never via Helm. CI cross-compiles amd64+arm64 to GHCR; Keel polls GHCR
+and rolls Deployments when a new image lands.
 
-**Why Tailscale as the cluster network.** Both machines are already on a Tailscale VPN for secure remote access. Using Tailscale as the flannel interface means the cluster network is the VPN — no extra tunnels, no open ports in AWS security groups, and MagicDNS gives stable hostnames that survive IP changes.
+**Operational facts that bite** (kept from hard-won experience):
 
-**Why two different service types for PLCs.** A PLC on the same node as the backend needs only a ClusterIP service — CoreDNS resolves the service name, no host port consumed. A PLC on a remote node needs a LoadBalancer service so k3s ServiceLB binds the port on the host's `tailscale0` interface; the backend then connects via that node's MagicDNS hostname (set in `plant.json` as `uri`), which routes over the Tailscale tunnel.
-
-**PLC URI convention.** `PlcConfig.uri` is `Option<String>`. Omit it when the PLC is on the same node as the backend — cluster DNS handles it. Set it explicitly only when the PLC is on a different host: another k3s node (use its MagicDNS hostname) or a real hardware PLC (use its static IP). Never hardcode `localhost` in `plant.json`; use `OPCUA_URI_OVERRIDE=opc.tcp://127.0.0.1` in a local dev `.env` instead.
+- Funnel proxies HTTP/2, which can't upgrade WebSockets — the backend gets its own Funnel port (8443).
+- nginx must resolve upstreams lazily via the CoreDNS IP, or it exits when a service isn't Ready yet.
+- The k3s server node needs ≥ 2 GB free RAM; swap breaks control-plane timeouts and nodes go `NotReady`.
+- A re-joined node loses custom labels — reapply `deploy_target` or its sim pods stay `Pending`.
+- `local-path` PVCs are node-pinned; one bound while its node is `NotReady` never gets its directory.
+- Image GC is tuned (60 %/40 %) so small edge disks don't fill from accumulated layers.
 
 ---
 
-### k3s networking: known gotchas
+## Pieces
 
-These were discovered during initial cluster bring-up and are documented so the next operator doesn't spend hours on them.
-
-**CoreDNS cannot resolve `.ts.net` hostnames from inside pods.**
-Pods use CoreDNS (`10.43.0.10`) as their resolver. CoreDNS doesn't forward `.ts.net` queries to the Tailscale MagicDNS server (`100.100.100.100`) because that address is only reachable from the host network, not from the pod network. The fix: add a static `NodeHosts` entry to the CoreDNS ConfigMap for any hostname that pods need to reach by Tailscale name:
-```yaml
-# CoreDNS ConfigMap — kube-system namespace
-NodeHosts: |
-  <tailscale-ip>  <hostname>.tail<tailnet>.ts.net
-```
-This is only needed for cross-node OPC-UA connections where the backend pod must reach a simulator on a remote node by its MagicDNS name.
-
-**nginx `host not found in upstream` on startup.**
-nginx resolves `proxy_pass` upstream hostnames at startup. If the upstream service isn't Ready yet, nginx exits. Fix: use the CoreDNS resolver IP with `resolver 10.43.0.10 valid=10s;` and a `set $upstream` variable so nginx resolves lazily per-request rather than at startup. See [frontend/docker/nginx.conf](frontend/docker/nginx.conf).
-
-**`imagePullPolicy: Always` + `:latest` tag — Helm can't detect image changes.**
-Helm compares manifests, not image digests. Pushing a new `:latest` image while the Deployment spec is unchanged causes Helm to do nothing. The `just helm-deploy` recipe runs `kubectl rollout restart deployment` after every Helm upgrade to force a pull. Keel (see below) handles automatic restarts for pushes that happen outside of `helm-deploy`.
-
-**WebSocket over Tailscale Funnel requires a separate port.**
-Tailscale Funnel proxies HTTPS traffic using HTTP/2. HTTP/2 doesn't support WebSocket upgrade (`101 Switching Protocols`). If the browser reaches the backend over Funnel on port 443, the WS handshake silently fails. Fix: expose the backend on a separate Funnel port (e.g. 8443) — the browser opens a fresh TCP connection to that port, negotiates HTTP/1.1, and the WS upgrade succeeds.
-
-**k3s agent local load balancer (`127.0.0.1:6444`) and resource pressure.**
-The k3s agent on each agent node runs a local load balancer that proxies control-plane traffic from `127.0.0.1:6444` to the server's `6443`. The agent bootstraps by posting certificate signing requests through this LB. If the k3s server node is memory- or I/O-constrained (high swap usage, iowait >50%), the server's API responses exceed the agent's default timeouts and every cert request is logged as "context deadline exceeded". The agent keeps retrying but never completes bootstrap, leaving the node `NotReady`. **Fix: ensure the server node has enough RAM** — k3s server alone consumes ~350 MB; add workload pods and you need at least 2 GB free to avoid swap. Swapping turns 1ms disk ops into 100ms+, which breaks all internal timeouts.
-
-**`deploy_target` label lost after node re-registration.**
-When an agent node leaves and rejoins the cluster (e.g. after a full agent uninstall/reinstall), its custom labels are not preserved — the node object is re-created fresh with only the default k3s labels. Any Deployments with `nodeSelector: deploy_target: <value>` will stay Pending until the label is reapplied:
-```
-kubectl label node <node-name> deploy_target=<value>
-```
-Add this step to the runbook for any agent node rebuild.
-
-**Local-path-provisioner PVC directories are node-local.**
-The default k3s storage class (`local-path`) creates directories under `/var/lib/rancher/k3s/storage/` on whichever node the pod first schedules on. The PV is then pinned to that node via node affinity. If the PVC is created while the target node is `NotReady`, the provisioner's setup job can't run, so the directory is never created even though the PV shows `Bound`. The pod then fails with `MountVolume.NewMounter initialization failed: path does not exist`. Fix: create the directory manually on the target node, or delete the PVC and let it reprovision once the node is Ready.
-
----
-
-### Cluster management: K9S
-
-K9S is a terminal UI for Kubernetes, pre-installed on the cluster server node by `deploy/provision.sh`. It gives a real-time view of nodes, pods, logs, and resource usage without writing kubectl commands.
-
-```
-k9s   # launch from any shell on the server node (uses the local kubeconfig)
-```
-
-Useful K9S shortcuts:
-- `:nodes` — node health, version, resource pressure
-- `:pods` — all pods across namespaces; shows READY, RESTARTS, AGE
-- `l` on a pod — live log tail
-- `d` on a pod — describe (events, volumes, env, conditions)
-- `ctrl-k` on a pod — delete (triggers Deployment to replace it)
-- `:deployments` — rollout status, desired vs available replicas
-- `?` — full keybind reference
-
-K9S reads from `~/.kube/config` by default. To use it from a developer laptop, point `KUBECONFIG` at the cluster kubeconfig (`~/.kube/factory-sim.yaml`).
-
----
-
----
-
-### Container layout
-
-Each binary is a leaf process: one config-volume input, one network port output.
-
-```
-┌─ pod: simulator ────────────────┐   ┌─ pod: backend ────────────────┐
-│  (one per simulated PLC)        │   │                               │
-│  /config  ◄─── ConfigMap (ro)   │   │  /config  ◄─── ConfigMap (ro) │
-│  /data    ◄─── PVC       (rw)   │   │  /data    ◄─── PVC       (rw) │
-│                                 │   │                               │
-│  env: PLANT_CONFIG=/config      │   │  env: PLANT_CONFIG=/config    │
-│       SIM_PLC_ID=plc-xxx        │   │       BE_HOST=0.0.0.0         │
-│       SIM_TICK_MS=100           │   │       BE_PORT=3001            │
-│       OPCUA_HOST=plc-xxx        │   │       BE_TICK_MS=100          │
-│       PKI_DIR=/data/pki         │   │       PKI_DIR=/data/pki       │
-│       SIM_HEALTH_PORT=9000      │   │                               │
-│                                 │   │                               │
-│  expose: <plc.port> (OPC-UA)    │   │  expose: 3001 (HTTP + WS)     │
-│           9000      (health)    │   └───────────────────────────────┘
-└─────────────────────────────────┘
-
-┌─ pod: frontend ─────────────────┐
-│  nginx:alpine + built SPA       │
-│  env: BE_URL=http://<ec2>:3001  │
-│  expose: 8080                   │
-└─────────────────────────────────┘
-```
-
-`plant.json` is delivered to every pod as a Kubernetes ConfigMap. It is the single source of truth — no copies, no transformation. The ConfigMap is created at deploy time from the local `config/plant.json` via `--set-file`.
-
----
-
-### CI/CD pipeline
-
-Images are never built on the deployment target. They are built once by CI and stored in GHCR; the cluster only pulls.
-
-```
-  git push → main
-        │
-        ▼
-  GitHub Actions  (.github/workflows/build-push.yml)
-        │  cross-compiles for linux/amd64 + linux/arm64 simultaneously
-        │  (no QEMU — native gcc cross-linker, vendored OpenSSL)
-        │  BuildKit layer cache stored in GHCR
-        │    → Rust deps only recompile when Cargo.lock changes
-        ▼
-  GHCR  ghcr.io/jakubklas/factory_sim/{simulator,backend,frontend}:latest
-        │  multi-arch manifest — registry serves the right binary per node arch
-        │
-        ▼  just helm-deploy  (from developer laptop)
-  Helm → k3s API server
-        │  applies Deployments, Services, ConfigMap
-        │  k3s scheduler places pods on correct nodes via nodeSelector
-        │  each node pulls the image it needs from GHCR
-        ▼
-  running stack  (EC2 + agent nodes)
-```
-
----
-
-### Topology changes → Helm regeneration
-
-`helm/factory-sim/values.yaml` is **generated from `plant.json`**, never edited by hand.
-
-```
-  config/plant.json       edit: add PLCs, change ports, set deploy_target
-        │
-        ▼
-  just helm-gen           runs codegen/src/bin/gen_helm_values.rs
-        │                 reads plant.json + platform.json + inventory.json
-        │                 emits one PLC entry per simulated PLC with
-        │                 correct serviceType (ClusterIP vs LoadBalancer)
-        ▼
-  helm/factory-sim/values.yaml   commit this
-        │
-        ▼
-  just helm-deploy        helm upgrade --install + --set-file plantConfig=...
-                          cluster converges to new topology
-```
-
----
-
-### Adding a new device
-
-Adding a new physical machine (another cloud VM, an edge device, bare metal) to the cluster is a two-command operation after registering it in `deploy/inventory.json`:
-
-```
-just add-device pi2      # joins pi2 to the k3s cluster and labels it
-# edit plant.json → set deploy_target for a PLC to "pi2"
-just helm-deploy         # scheduler places the pod on pi2
-```
-
-`add-device` fetches the cluster join token from EC2, installs the k3s agent on the new device over SSH, waits for the node to be Ready, and applies the `deploy_target` label — no manual kubectl needed.
-
----
-
-### Key commands
-
-| Command | What it does |
+| Unit | Role |
 |---|---|
-| `just be` | Run backend locally (cargo) |
-| `just sim plc-001` | Run one simulator locally (cargo) |
-| `just helm-gen` | Regenerate `values.yaml` from `plant.json` |
-| `just helm-deploy` | Deploy / upgrade the full stack on k3s |
-| `just add-device DEVICE` | Join a new machine to the cluster |
-| `just k3s-status` | Show node + pod status across the cluster |
-| `just k3s-logs POD` | Stream logs from a named pod |
+| `plant_config` | Shared schema (DataType, device-type I/O contract) — types only, no runtime state. |
+| `backend` | Discovery, orchestration tick, setpoint/CRUD API, persistence, sim provisioning. Async OPC-UA client. |
+| `simulator` | Dumb physics host: self-builds, runs Rhai, serves OPC-UA. Async OPC-UA server. |
+| `frontend` | Floor editor + 3D render; talks only to the backend API + WebSocket. |
+| Postgres · object store | Plant state + assets. |
+
+OPC-UA is the **async** `opcua` line — sessions reconnect internally, so browse/read/write share one
+session with no manual reconnect handling.
 
 ---
 
-### Env-var surface
+## Backend API
 
-| Var                  | Used by   | Purpose                                                              |
-|----------------------|-----------|----------------------------------------------------------------------|
-| `PLANT_CONFIG`       | both      | Path to directory holding `plant.json` + `device_types.json`         |
-| `SIM_PLC_ID`         | simulator | Which PLC this process owns (required)                               |
-| `SIM_TICK_MS`        | simulator | Physics tick cadence (default 100)                                   |
-| `SIM_HEALTH_PORT`    | simulator | HTTP health endpoint port (default 9000)                             |
-| `OPCUA_HOST`         | simulator | Hostname advertised in OPC-UA discovery URLs                         |
-| `PKI_DIR`            | both      | Where the OPC-UA crate writes its auto-generated keypair             |
-| `BE_HOST/PORT/TICK_MS` | backend | WS+HTTP bind address + tick rate                                     |
-| `OPCUA_URI_OVERRIDE` | backend   | Rewrite the host portion of every PLC URL — dev-only escape hatch    |
-
----
-
-## API surface
-
-### Backend (`BE_PORT`, default 3001)
-
-| Endpoint                | Method | Returns                                  |
-|-------------------------|--------|------------------------------------------|
-| `/ws`                   | WS     | full `IngestedState` every tick (JSON)   |
-| `/api/plant`            | GET    | `PlantConfig` — static topology         |
-| `/api/log-level?set=…`  | GET    | reload tracing filter at runtime         |
-| `/health`               | GET    | `{"status":"ok"}` — liveness probe      |
-
-### Simulator (`SIM_HEALTH_PORT`, default 9000)
-
-| Endpoint   | Method | Returns                             |
-|------------|--------|-------------------------------------|
-| `/health`  | GET    | `{"status":"ok"}` — liveness probe |
-
----
-
-## Evaluation
-
-Things worth fixing:
-
-1. **Connectors use `std::thread`, not tokio tasks.** Historical: `opcua-rs 0.12` has a sync client API. One OS thread per PLC is fine at this scale; reconsider when scaling to dozens of PLCs or when an async opcua client crate is viable.
-
-2. **Config is file-based, not API-driven.** `plant.json` is baked into a ConfigMap at deploy time. The intended path: backend seeds its DB from `plant.json` on first boot, then exposes `GET/PUT /api/config` so the frontend can edit the plant topology live without redeploying. The ConfigMap then disappears — pods fetch config from the backend API.
-
-Things that are fine and worth not re-debating:
-
-- Full `IngestedState` cloned per WS frame — small, JSON-serialisable, no measurable cost.
-- `RwLock` instead of `watch`/channels for state — straightforward, no contention at tick-ms cadence.
-
-Recently fixed:
-
-- **Simulator `/health` endpoint** — each simulator now exposes `GET /health` on port 9000 (axum, separate from the OPC-UA port); k3s liveness probe wired in the Helm template.
-- **PVC for PKI data** — both simulator and backend pods use a `PersistentVolumeClaim` for `/data` instead of `emptyDir`; OPC-UA keypairs survive pod restarts, eliminating cert-churn backoff storms.
-- **OPC-UA reconnect loop** — `opcua 0.12` shares an async runtime across `Client` instances; dropping the old `PlcConnection` while creating a new one closed the new session's message sender, causing every reconnect attempt to fail permanently. Fixed by calling `drop(conn)` before `connect_with_backoff()` in `GenericConnector`. The underlying cause (shared runtime in `opcua 0.12`) is tracked as a must-fix; see `PLAN.md` weaknesses.
-- **Keel auto-deploy** — Keel runs in `kube-system` and polls GHCR every 5 minutes; annotated Deployments are restarted automatically when a new `:latest` image is pushed. Eliminates manual `helm-deploy` for image-only changes.
+| Endpoint | Purpose |
+|---|---|
+| `GET /ws` | live `IngestedState` stream |
+| `… /api/device-types · /plcs · /instances · /wires` | CRUD the libraries, floor and wiring |
+| `GET /api/plc/{id}/discovered` | a PLC's live browsed node tree |
+| `POST /api/setpoint` | write a writable node (sim or real) |
+| `GET /api/plc/{id}/config` | **sim self-build** — a simulator fetching its own definition (never for real PLCs) |
+| `GET /api/assets/{id}` | a 3D model / icon |
+| `GET /health` | liveness |

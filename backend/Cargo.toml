@@ -9,9 +9,9 @@ path = "src/main.rs"
 
 [dependencies]
 plant_config = { path = "../plant_config" }
-# OPC-UA server and client
-opcua = { version = "0.12", features = ["server", "client"] }
-openssl = { version = "0.10", features = ["vendored"] }
+# OPC-UA async client
+async-opcua = { version = "0.18", features = ["client"] }
+async-trait = "0.1"
 
 # Async runtime
 tokio = { version = "1.41", features = ["full"] }

@@ -2,22 +2,26 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
+use async_trait::async_trait;
 use plant_config::DataType;
 
 /// Full shared state written by all connectors: device_id → field_name → value.
 pub type IngestedState = HashMap<String, HashMap<String, DataType>>;
-/// One connector's poll result — upserted into IngestedState each tick, leaving other devices untouched.
+/// One connector's poll result — upserted into IngestedState each tick.
 pub type PartialState  = HashMap<String, HashMap<String, DataType>>;
 
 /// Implement this to add a new protocol. connect() makes a single attempt; GenericConnector handles retry.
-pub trait ConnectorImpl: Send + 'static {
+#[async_trait]
+pub trait ConnectorImpl: Send + Sync + 'static {
     type Conn: Send + 'static;
-    fn connect(&self) -> Result<Self::Conn, Box<dyn std::error::Error + Send + Sync>>;
+    async fn connect(&self) -> Result<Self::Conn, Box<dyn std::error::Error + Send + Sync>>;
     /// Return Err if the connection is broken — triggers reconnect in GenericConnector.
-    fn poll(&self, conn: &Self::Conn) -> Result<PartialState, Box<dyn std::error::Error + Send + Sync>>;
+    async fn poll(&self, conn: &Self::Conn) -> Result<PartialState, Box<dyn std::error::Error + Send + Sync>>;
 }
 
-/// One OS thread per connector. Runs connect → poll loop with exponential backoff on failure.
+/// One tokio task per connector. Runs connect → poll loop with exponential backoff on initial connect.
+/// async-opcua sessions reconnect internally on transient drops, so explicit reconnect is only
+/// needed when the session itself becomes permanently unrecoverable.
 pub struct GenericConnector<C: ConnectorImpl> {
     name:         String,
     impl_:        C,
@@ -31,16 +35,15 @@ impl<C: ConnectorImpl> GenericConnector<C> {
         Self { name: name.into(), impl_, tick_ms, ingested, backoff_secs: &[1, 2, 4, 8, 16, 30] }
     }
 
-    /// Spawn the poll thread. Consumes self — ownership moves into the thread.
+    /// Spawn a tokio task. Consumes self — ownership moves into the task.
     pub fn start(self) {
-        std::thread::spawn(move || self.run());
+        tokio::spawn(async move { self.run().await });
     }
 
-    /// Retries connect() with exponential backoff until it succeeds. Logs at DEBUG until first success.
-    fn connect_with_backoff(&self) -> C::Conn {
+    async fn connect_with_backoff(&self) -> C::Conn {
         let mut attempt: usize = 0;
         loop {
-            match self.impl_.connect() {
+            match self.impl_.connect().await {
                 Ok(conn) => {
                     if attempt == 0 {
                         tracing::info!("Connector '{}' connected", self.name);
@@ -55,27 +58,26 @@ impl<C: ConnectorImpl> GenericConnector<C> {
                         "Connector '{}' connect attempt {} failed — retrying in {}s: {}",
                         self.name, attempt + 1, delay, e
                     );
-                    std::thread::sleep(std::time::Duration::from_secs(delay));
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
                     attempt += 1;
                 }
             }
         }
     }
 
-    fn run(self) {
-        let mut conn = self.connect_with_backoff();
+    async fn run(self) {
+        let mut conn = self.connect_with_backoff().await;
         let mut consecutive_failures: usize = 0;
         let summary_every = Duration::from_secs(30);
         let mut last_summary = Instant::now();
 
         loop {
-            std::thread::sleep(std::time::Duration::from_millis(self.tick_ms));
+            tokio::time::sleep(Duration::from_millis(self.tick_ms)).await;
 
-            match self.impl_.poll(&conn) {
+            match self.impl_.poll(&conn).await {
                 Ok(partial) => {
                     consecutive_failures = 0;
 
-                    // Log a full state snapshot every 30s at INFO level.
                     if last_summary.elapsed() >= summary_every {
                         last_summary = Instant::now();
                         let mut msg = format!(
@@ -117,12 +119,13 @@ impl<C: ConnectorImpl> GenericConnector<C> {
                         "Connector '{}' poll failed (attempt {}) — waiting {}s before reconnect: {}",
                         self.name, consecutive_failures, delay, e
                     );
-                    std::thread::sleep(std::time::Duration::from_secs(delay));
-                    // Drop old connection BEFORE creating the new one — opcua 0.12 uses a shared
-                    // async runtime; dropping Client while a new session is being initialised
-                    // closes the shared sender and kills the new session's background tasks.
-                    drop(conn);
-                    conn = self.connect_with_backoff();
+                    tokio::time::sleep(Duration::from_secs(delay)).await;
+                    // Session auto-reconnects internally; only re-establish the outer Conn when
+                    // failures persist long enough to suggest the session event loop gave up.
+                    if consecutive_failures >= self.backoff_secs.len() {
+                        conn = self.connect_with_backoff().await;
+                        consecutive_failures = 0;
+                    }
                 }
             }
         }

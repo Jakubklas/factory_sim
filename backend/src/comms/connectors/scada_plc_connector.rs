@@ -1,18 +1,21 @@
 use std::str::FromStr;
 use std::sync::Arc;
-use opcua::client::prelude::*;
-use opcua::sync::RwLock as OpcRwLock;
+use async_trait::async_trait;
+use opcua::client::{ClientBuilder, IdentityToken};
+use opcua::types::{
+    AttributeId, DataValue, EndpointDescription, MessageSecurityMode, NodeId,
+    ReadValueId, TimestampsToReturn, UserTokenPolicy, Variant,
+};
 use plant_config::{DataType, PlcEndpointConfig};
 use crate::comms::generic_connector::{ConnectorImpl, PartialState};
 
 // ============================================================================
-// Connection handle — owns both Client and Session.
-// Client must stay alive for the duration of the session.
+// Connection handle — owns the active session (Arc so poll can reference it).
+// The event loop runs in a separate spawned task and handles reconnect.
 // ============================================================================
 
 pub struct PlcConnection {
-    _client: Client,
-    session: Arc<OpcRwLock<Session>>,
+    session: Arc<opcua::client::Session>,
 }
 
 // ============================================================================
@@ -22,7 +25,7 @@ pub struct PlcConnection {
 struct NodeRead {
     device_id:   String,
     metric_name: String,
-    node_id:     String,
+    node_id:     NodeId,
     data_type:   NodeDataType,
 }
 
@@ -39,146 +42,116 @@ pub struct ScadaPlcConnector {
 }
 
 impl ScadaPlcConnector {
-    /// Build from a PlcEndpointConfig — works for both simulated and real PLCs.
-    /// No PlantConfigHandle or simulator knowledge needed.
     pub fn new(config: PlcEndpointConfig) -> (String, Self) {
-        let node_reads = config.node_reads.into_iter().map(|n| NodeRead {
-            device_id:   n.device_id,
-            metric_name: n.metric_name,
-            node_id:     n.node_id,
-            data_type:   match n.data_type {
-                DataType::Float(_)   => NodeDataType::Float,
-                DataType::Str(_)     => NodeDataType::Str,
-                DataType::Boolean(_) => NodeDataType::Boolean,
-            },
+        let node_reads = config.node_reads.into_iter().filter_map(|n| {
+            let node_id = NodeId::from_str(&n.node_id).ok()?;
+            Some(NodeRead {
+                device_id:   n.device_id,
+                metric_name: n.metric_name,
+                node_id,
+                data_type:   match n.data_type {
+                    DataType::Float(_)   => NodeDataType::Float,
+                    DataType::Str(_)     => NodeDataType::Str,
+                    DataType::Boolean(_) => NodeDataType::Boolean,
+                },
+            })
         }).collect();
 
         let connector = Self {
-            plc_name:   config.name.clone(),
-            endpoint:   config.url,
+            plc_name: config.name.clone(),
+            endpoint: config.url,
             node_reads,
         };
-
         (config.name, connector)
     }
 }
 
+#[async_trait]
 impl ConnectorImpl for ScadaPlcConnector {
     type Conn = PlcConnection;
 
-    fn connect(&self) -> Result<PlcConnection, Box<dyn std::error::Error + Send + Sync>> {
-        let (client, session) = connect_to_plc(&self.endpoint)?;
-        Ok(PlcConnection { _client: client, session })
+    async fn connect(&self) -> Result<PlcConnection, Box<dyn std::error::Error + Send + Sync>> {
+        let base = std::env::var("PKI_DIR").unwrap_or_else(|_| "./pki".to_string());
+        let pki_dir = std::path::PathBuf::from(base).join("clients").join("scada");
+
+        let mut client = ClientBuilder::new()
+            .application_name("factory-sim-scada")
+            .application_uri("urn:factory-sim-scada")
+            .create_sample_keypair(true)
+            .trust_server_certs(true)
+            .session_retry_limit(-1)   // infinite internal reconnect
+            .pki_dir(pki_dir)
+            .client()
+            .map_err(|e| format!("ClientBuilder::client() failed: {:?}", e))?;
+
+        let endpoint: EndpointDescription = (
+            self.endpoint.as_str(),
+            "None",
+            MessageSecurityMode::None,
+            UserTokenPolicy::anonymous(),
+        ).into();
+
+        let (session, event_loop) = client
+            .connect_to_matching_endpoint(endpoint, IdentityToken::Anonymous)
+            .await
+            .map_err(|e| format!("connect_to_matching_endpoint failed: {:?}", e))?;
+
+        event_loop.spawn();
+        session.wait_for_connection().await;
+
+        Ok(PlcConnection { session })
     }
 
-    fn poll(&self, conn: &PlcConnection) -> Result<PartialState, Box<dyn std::error::Error + Send + Sync>> {
-        let mut partial = PartialState::new();
-        let s = conn.session.read();
+    async fn poll(&self, conn: &PlcConnection) -> Result<PartialState, Box<dyn std::error::Error + Send + Sync>> {
+        let node_ids: Vec<ReadValueId> = self.node_reads.iter()
+            .map(|n| ReadValueId {
+                node_id:      n.node_id.clone(),
+                attribute_id: AttributeId::Value as u32,
+                ..Default::default()
+            })
+            .collect();
 
-        for node in &self.node_reads {
-            match read_node(&s, &node.node_id, &node.data_type) {
-                Ok(value) => {
-                    tracing::trace!(
-                        "{}.{}.{} = {}",
-                        self.plc_name, node.device_id, node.metric_name, value
-                    );
-                    partial
-                        .entry(node.device_id.clone())
-                        .or_default()
-                        .insert(node.metric_name.clone(), value);
-                }
-                Err(e) => {
-                    // One failed read poisons the whole poll — triggers reconnect in GenericConnector.
-                    // If this fires, check that node_id format matches what plc_server registers.
-                    return Err(format!(
-                        "[{}] node '{}' read failed: {}",
-                        self.plc_name, node.node_id, e
-                    ).into());
-                }
-            }
+        let results = conn.session
+            .read(&node_ids, TimestampsToReturn::Neither, 0.0)
+            .await
+            .map_err(|e| format!("[{}] session.read failed: {:?}", self.plc_name, e))?;
+
+        let mut partial = PartialState::new();
+
+        for (node, dv) in self.node_reads.iter().zip(results.iter()) {
+            let value = extract_value(dv, &node.data_type)
+                .map_err(|e| format!("[{}] node '{}' read failed: {}", self.plc_name, node.node_id, e))?;
+
+            tracing::trace!("{}.{}.{} = {}", self.plc_name, node.device_id, node.metric_name, value);
+            partial
+                .entry(node.device_id.clone())
+                .or_default()
+                .insert(node.metric_name.clone(), value);
         }
 
         Ok(partial)
     }
 }
 
-// ============================================================================
-// OPC-UA helpers
-// ============================================================================
-
-/// Single-attempt connect. Backoff and retry are handled by GenericConnector.
-fn connect_to_plc(
-    endpoint: &str,
-) -> Result<(Client, Arc<OpcRwLock<Session>>), Box<dyn std::error::Error + Send + Sync>> {
-    // PKI_DIR overrides the cert location; default `./pki` works for `cargo run` from repo root.
-    let base = std::env::var("PKI_DIR").unwrap_or_else(|_| "./pki".to_string());
-    let pki_dir = std::path::PathBuf::from(base).join("clients").join("scada");
-
-    let mut client = ClientBuilder::new()
-        .application_name("factory-sim-scada")
-        .application_uri("urn:factory-sim-scada")
-        .create_sample_keypair(true)
-        .trust_server_certs(true)
-        .session_retry_limit(0)
-        .pki_dir(pki_dir)
-        .client()
-        .ok_or_else(|| -> Box<dyn std::error::Error + Send + Sync> {
-            "ClientBuilder::client() returned None — check OPC-UA config".into()
-        })?;
-
-    let session = client
-        .connect_to_endpoint(
-            (
-                endpoint,
-                SecurityPolicy::None.to_str(),
-                MessageSecurityMode::None,
-                UserTokenPolicy::anonymous(),
-            ),
-            IdentityToken::Anonymous,
-        )
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { format!("{:?}", e).into() })?;
-
-    Ok((client, session))
-}
-
-fn read_node(
-    session:   &Session,
-    node_id:   &str,
-    data_type: &NodeDataType,
-) -> Result<DataType, Box<dyn std::error::Error + Send + Sync>> {
-    let node_id = NodeId::from_str(node_id)
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("invalid node_id '{}': {:?}", node_id, e).into()
-        })?;
-
-    let results = session
-        .read(&[ReadValueId::from(node_id)], TimestampsToReturn::Neither, 0.0)
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
-            format!("session.read failed: {:?}", e).into()
-        })?;
-
-    let variant = results
-        .first()
-        .and_then(|dv| dv.value.as_ref())
-        .ok_or("no value returned")?;
-
+fn extract_value(dv: &DataValue, data_type: &NodeDataType) -> Result<DataType, String> {
+    let variant = dv.value.as_ref().ok_or("no value in DataValue")?;
     match data_type {
         NodeDataType::Float => {
             let f = match variant {
                 Variant::Double(v) => *v,
                 Variant::Float(v)  => *v as f64,
                 Variant::Int32(v)  => *v as f64,
-                _ => return Err("expected numeric variant".into()),
+                other => return Err(format!("expected numeric variant, got {:?}", other)),
             };
             Ok(DataType::Float(f))
         }
         NodeDataType::Str => match variant {
-            Variant::String(s) => Ok(DataType::Str(s.to_string())),
-            _ => Err("expected string variant".into()),
+            Variant::String(s) => Ok(DataType::Str(s.value().as_deref().unwrap_or("").to_string())),
+            other => Err(format!("expected string variant, got {:?}", other)),
         },
         NodeDataType::Boolean => match variant {
             Variant::Boolean(b) => Ok(DataType::Boolean(*b)),
-            _ => Err("expected boolean variant".into()),
+            other => Err(format!("expected boolean variant, got {:?}", other)),
         },
     }
 }

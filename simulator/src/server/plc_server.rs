@@ -1,9 +1,12 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use opcua::server::prelude::*;
-use opcua::server::config::{ServerConfig, TcpConfig};
-use opcua::server::server::Server;
+use opcua::server::{
+    ServerBuilder,
+    node_manager::memory::{simple_node_manager, SimpleNodeManager},
+    address_space::Variable,
+};
+use opcua::server::diagnostics::NamespaceMetadata;
+use opcua::types::{DataValue, NodeId, Variant};
 use plant_config::{DataType, PlcConfig, ResolvedDevice};
 use crate::state::SimulatorState;
 
@@ -15,118 +18,105 @@ pub async fn start_one(
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Starting OPC-UA server '{}' on port {}", plc.name, plc.port);
 
-    let node_specs = collect_node_specs(&devices, &plc);
-
-    let mut server_config = ServerConfig::default();
-    server_config.application_name       = plc.name.clone();
-    server_config.application_uri        = format!("urn:factory-sim:{}", plc.plc_id);
-    server_config.product_uri            = format!("urn:factory-sim:{}", plc.plc_id);
-    server_config.create_sample_keypair  = true;
-    server_config.pki_dir                = pki_dir_for_server(&plc.name);
-    server_config.discovery_server_url   = None;
-    // Bind to 0.0.0.0 so other containers/hosts on the network can reach us.
-    server_config.tcp_config = TcpConfig {
-        hello_timeout: 10,
-        host:          "0.0.0.0".to_string(),
-        port:          plc.port,
-    };
-    // Advertise via the hostname clients should connect on. Resolution order:
-    // OPCUA_HOST (explicit) → HOSTNAME (Docker sets this to the service/container name) → localhost.
+    let pki_dir = pki_dir_for_server(&plc.name);
+    let namespace_uri = format!("urn:factory-sim:{}", plc.plc_id);
     let advertise_host = std::env::var("OPCUA_HOST")
         .or_else(|_| std::env::var("HOSTNAME"))
         .unwrap_or_else(|_| "localhost".to_string());
-    server_config.discovery_urls = vec![format!("opc.tcp://{}:{}", advertise_host, plc.port)];
-    server_config.endpoints.insert(
-        "none".to_string(),
-        ServerEndpoint::new_none("/", &[ANONYMOUS_USER_TOKEN_ID.to_string()]),
+
+    let node_mgr_builder = simple_node_manager(
+        NamespaceMetadata { namespace_uri: namespace_uri.clone(), ..Default::default() },
+        "factory-sim",
     );
 
-    let server = Server::new(server_config);
+    let (server, handle) = ServerBuilder::new_anonymous(&plc.name)
+        .application_uri(format!("urn:factory-sim-server:{}", plc.plc_id))
+        .host("0.0.0.0")
+        .port(plc.port)
+        .pki_dir(pki_dir)
+        .create_sample_keypair(true)
+        .trust_client_certs(true)
+        .discovery_urls(vec![format!("opc.tcp://{}:{}/", advertise_host, plc.port)])
+        .with_node_manager(node_mgr_builder)
+        .build()
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    // Build address space: PLC folder → device folders → metric variables
+    let node_mgr = handle.node_managers()
+        .get_of_type::<SimpleNodeManager>()
+        .ok_or("SimpleNodeManager not found in built server")?;
+
+    // Namespace index for our nodes — determined by registration order.
+    // With the default "server" feature (core + diagnostics pre-registered), our
+    // namespace lands at index 2, matching the "ns=2;s=..." format produced by
+    // endpoint_configs() and expected by the backend in Phase 0.
+    let ns = handle.get_namespace_index(&namespace_uri).unwrap_or(2);
+
+    // Collect node specs from device type definitions
+    let node_specs = collect_node_specs(&devices, &plc, ns);
+
+    // Populate address space
     {
-        let address_space = server.address_space();
-        let mut as_ = address_space.write();
+        let mut as_ = node_mgr.address_space().write();
 
-        let plc_folder = as_
-            .add_folder(&plc.name, &plc.name, &NodeId::objects_folder_id())
-            .expect("Failed to create PLC folder");
+        let plc_folder_id = NodeId::new(ns, format!("folder/{}", plc.name));
+        as_.add_folder(&plc_folder_id, &plc.name, &plc.name, &NodeId::objects_folder_id());
 
-        let mut seen: HashSet<&str> = HashSet::new();
-        let device_ids: Vec<&str> = node_specs
-            .iter()
-            .filter(|s| seen.insert(s.device_id.as_str()))
-            .map(|s| s.device_id.as_str())
-            .collect();
+        for spec in &node_specs {
+            let device_folder_id = NodeId::new(ns, format!("folder/{}/{}", plc.name, spec.device_id));
+            as_.add_folder(&device_folder_id, &spec.device_id, &spec.device_id, &plc_folder_id);
 
-        for device_id in &device_ids {
-            let device_folder = as_
-                .add_folder(*device_id, *device_id, &plc_folder)
-                .expect("Failed to create device folder");
-
-            let variables: Vec<Variable> = node_specs
-                .iter()
-                .filter(|s| s.device_id.as_str() == *device_id)
-                .map(|s| {
-                    let node_id = NodeId::new(2, s.node_path.clone());
-                    match &s.initial_value {
-                        DataType::Float(f)   => Variable::new(&node_id, &s.metric_name, &s.metric_name, *f),
-                        DataType::Str(str)   => Variable::new(&node_id, &s.metric_name, &s.metric_name, UAString::from(str.as_str())),
-                        DataType::Boolean(b) => Variable::new(&node_id, &s.metric_name, &s.metric_name, *b),
-                    }
-                })
-                .collect();
-
-            as_.add_variables(variables, &device_folder);
+            let node_id = NodeId::new(ns, spec.node_path.clone());
+            let var = match &spec.initial_value {
+                DataType::Float(f)   => Variable::new(&node_id, &spec.metric_name, &spec.metric_name, *f),
+                DataType::Str(s)     => Variable::new(&node_id, &spec.metric_name, &spec.metric_name, s.as_str()),
+                DataType::Boolean(b) => Variable::new(&node_id, &spec.metric_name, &spec.metric_name, *b),
+            };
+            as_.add_variables(vec![var], &device_folder_id);
         }
     }
 
-    // Address-space update loop: reads SimulatorState snapshot, pushes to OPC-UA nodes
-    let address_space = server.address_space();
-    let plc_name      = plc.name.clone();
+    // Address-space update loop: reads SimulatorState snapshot, pushes to OPC-UA nodes.
+    let subs       = handle.subscriptions().clone();
+    let node_mgr2  = node_mgr.clone();
+    let node_specs2 = node_specs.clone();
 
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(tick_ms));
         loop {
             interval.tick().await;
             let snapshot = state.read().await.snapshot();
-            let mut as_  = address_space.write();
-            for spec in &node_specs {
+            for spec in &node_specs2 {
                 let value = snapshot
                     .get(&spec.device_id)
                     .and_then(|fields| fields.get(&spec.metric_name));
                 if let Some(data_type) = value {
-                    let node_id = NodeId::new(2, spec.node_path.clone());
-                    let _ = as_.set_variable_value(
-                        node_id, datatype_to_variant(data_type),
-                        &DateTime::now(), &DateTime::now(),
-                    );
+                    let node_id = NodeId::new(spec.ns, spec.node_path.clone());
+                    let variant  = datatype_to_variant(data_type);
+                    let _ = node_mgr2.set_value(&subs, &node_id, None, DataValue::new_now(variant));
                 }
             }
         }
     });
 
-    let plc_name_thread = plc_name.clone();
-    std::thread::Builder::new()
-        .name(format!("{}-opcua", plc_name))
-        .spawn(move || {
-            tracing::info!("OPC-UA server thread started: {}", plc_name_thread);
-            server.run();
-            tracing::info!("OPC-UA server thread stopped: {}", plc_name_thread);
-        })
-        .expect("Failed to spawn OPC-UA server thread");
+    tokio::spawn(async move {
+        if let Err(e) = server.run().await {
+            tracing::error!("OPC-UA server '{}' stopped: {}", plc.name, e);
+        }
+    });
 
     Ok(())
 }
 
+#[derive(Clone)]
 struct NodeSpec {
+    ns:            u16,
     device_id:     String,
     metric_name:   String,
     node_path:     String,
     initial_value: DataType,
 }
 
-fn collect_node_specs(devices: &[ResolvedDevice], plc: &PlcConfig) -> Vec<NodeSpec> {
+fn collect_node_specs(devices: &[ResolvedDevice], plc: &PlcConfig, ns: u16) -> Vec<NodeSpec> {
     let plc_device_ids: Vec<&str> = plc.devices.iter()
         .map(|d| d.device_id.as_str())
         .collect();
@@ -135,6 +125,7 @@ fn collect_node_specs(devices: &[ResolvedDevice], plc: &PlcConfig) -> Vec<NodeSp
         .filter(|d| plc_device_ids.contains(&d.config.device_id.as_str()))
         .flat_map(|d| {
             d.type_def.metrics.iter().map(move |m| NodeSpec {
+                ns,
                 device_id:     d.config.device_id.clone(),
                 metric_name:   m.name.clone(),
                 node_path:     format!("{}.{}.{}", plc.name, d.config.device_id, m.name),
@@ -144,9 +135,6 @@ fn collect_node_specs(devices: &[ResolvedDevice], plc: &PlcConfig) -> Vec<NodeSp
         .collect()
 }
 
-/// PKI directory for the OPC-UA server's auto-generated keypair.
-/// Read from `PKI_DIR` (defaults to `./pki`) and namespaced per PLC so multiple simulators
-/// on the same host don't clobber each other's certs.
 fn pki_dir_for_server(plc_name: &str) -> std::path::PathBuf {
     let base = std::env::var("PKI_DIR").unwrap_or_else(|_| "./pki".to_string());
     let safe = plc_name.to_lowercase().replace(' ', "-");
@@ -156,7 +144,7 @@ fn pki_dir_for_server(plc_name: &str) -> std::path::PathBuf {
 fn datatype_to_variant(value: &DataType) -> Variant {
     match value {
         DataType::Float(f)   => Variant::Double(*f),
-        DataType::Str(s)     => Variant::String(UAString::from(s.as_str())),
+        DataType::Str(s)     => Variant::String(s.clone().into()),
         DataType::Boolean(b) => Variant::Boolean(*b),
     }
 }

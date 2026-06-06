@@ -96,6 +96,10 @@ preventing orphaned wires from breaking a later plant load.
 ## Seeding
 
 [`db/seed.rs`](../backend/src/db/seed.rs). Runs **only when `SEED_DIR` is set and the DB is
-empty**. Imports `device_types.json`, `plant.json`, and (optionally) `inventory.json` into
-the tables, then stops. After that the JSON files are never read again — the DB is canonical.
+empty**. Imports `device_types.json`, `plant.json`, and (optionally) `inventory.json` from
+one directory, then stops. After that the JSON files are never read again — the DB is canonical.
 This is the one-time bridge from the old file-based config to the live database.
+
+Order matters and is fixed: **`deploy_nodes` → `device_types` → `plcs` + `device_instances` → `wires`**
+(each step satisfies the next step's foreign keys). Each device's `input_variables` are turned
+into `wires` rows in the final pass — after every instance exists, so cross-PLC sources resolve.

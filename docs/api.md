@@ -4,6 +4,11 @@ Served by the backend ([`api/ws_bridge.rs`](../backend/src/api/ws_bridge.rs)) on
 `WS_HOST:WS_PORT`. CORS is permissive. All `/api/*` data routes require a database;
 without `DATABASE_URL` they return `503`. The frontend uses only `/api/plant` and `/ws`.
 
+Status conventions: `200`/`201` success, `204` on delete, `400` malformed input (e.g. a
+non-UUID path), `404` missing, `409` constraint conflict (e.g. deleting a device type still
+in use), `503` no database. For instance routes the URL `:plc_id` is authoritative — a
+request can only create or delete instances on the PLC named in the path.
+
 ---
 
 ## Real-time & meta

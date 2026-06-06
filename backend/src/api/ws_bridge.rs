@@ -45,11 +45,11 @@ pub async fn start(
     db:            Option<PgPool>,
     assets:        Arc<LocalStore>,
     discovered:    Arc<RwLock<DiscoveredState>>,
-    write_handles: std::collections::HashMap<String, WriteHandle>,
+    write_handles: Arc<std::collections::HashMap<String, WriteHandle>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         ingested, plant, tick_ms, log_handle, db, assets, discovered,
-        write_handles: Arc::new(write_handles),
+        write_handles,
     };
 
     let app = Router::new()

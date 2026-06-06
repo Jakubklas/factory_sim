@@ -31,9 +31,7 @@ impl ResolvedPlant {
             .map(|t| (t.device_type.clone(), t))
             .collect();
 
-        // Build device_id → plc_id map up front so input_variables can be validated
-        // to stay within a single PLC (real PLCs are separate boxes — cross-PLC
-        // wiring would have to traverse OPC-UA, which the physics engine cannot do).
+        // Build device_id → plc_id map for existence validation of input_variable sources.
         let device_to_plc: HashMap<String, String> = config.plcs.iter()
             .flat_map(|plc| plc.devices.iter().map(move |d| (d.device_id.clone(), plc.plc_id.clone())))
             .collect();
@@ -59,18 +57,12 @@ impl ResolvedPlant {
                 }
 
                 for input in &device_config.input_variables {
-                    let source_plc = device_to_plc.get(&input.source_device_id)
-                        .ok_or_else(|| format!(
+                    // Validate that the source device exists; cross-PLC wires are allowed —
+                    // the backend routes them via OPC-UA write each tick (Phase 4 onwards).
+                    if !device_to_plc.contains_key(&input.source_device_id) {
+                        return Err(format!(
                             "Device '{}' input '{}' references unknown source device '{}'",
                             device_config.device_id, input.name, input.source_device_id
-                        ))?;
-                    if source_plc != &plc.plc_id {
-                        return Err(format!(
-                            "Device '{}' (on PLC '{}') input '{}' references device '{}' on PLC '{}' — \
-                             cross-PLC physics wiring is not allowed; move one of the devices or \
-                             expose the value via a separate OPC-UA hop",
-                            device_config.device_id, plc.plc_id, input.name,
-                            input.source_device_id, source_plc
                         ).into());
                     }
                 }

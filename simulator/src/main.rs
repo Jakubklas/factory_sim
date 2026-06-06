@@ -13,7 +13,7 @@ mod health;
 
 use state::SimulatorState;
 use physics_definitions::PhysicsEngine;
-use tick::{TickPlan, tick};
+use tick::tick;
 
 struct SecondsTimer;
 impl tracing_subscriber::fmt::time::FormatTime for SecondsTimer {
@@ -51,18 +51,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect();
     let physics = Arc::new(PhysicsEngine::new(&device_types)?);
 
-    // Build tick plan and seed state
-    let plan    = Arc::new(TickPlan::build(&plant.devices)?);
     let devices = Arc::new(plant.devices);
     let state   = Arc::new(RwLock::new(SimulatorState::new(&devices)));
 
-    tracing::info!("Physics engine ready  ·  tick order: {}", plan.order().join(" → "));
+    tracing::info!("Physics engine ready  ·  Jacobi tick  ·  {} device(s)", devices.len());
 
     // Physics tick loop
     {
         let tick_state   = Arc::clone(&state);
         let tick_devices = Arc::clone(&devices);
-        let tick_plan    = Arc::clone(&plan);
         let tick_physics = Arc::clone(&physics);
 
         tokio::spawn(async move {
@@ -71,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let tick_start = Instant::now();
                 {
                     let mut s = tick_state.write().await;
-                    tick(&mut s, &tick_devices, &tick_plan, &tick_physics, interval.as_secs_f64());
+                    tick(&mut s, &tick_devices, &tick_physics, interval.as_secs_f64());
                 }
                 let elapsed = tick_start.elapsed();
                 if let Some(remaining) = interval.checked_sub(elapsed) {

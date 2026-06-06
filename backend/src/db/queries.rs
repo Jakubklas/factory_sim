@@ -153,14 +153,14 @@ pub async fn upsert_plc(
 // device_instances
 // ============================================================================
 
-pub async fn list_instances_for_plc(pool: &PgPool, plc_id: Uuid) -> sqlx::Result<Vec<DeviceInstance>> {
+pub async fn list_device_instances_for_plc(pool: &PgPool, plc_id: Uuid) -> sqlx::Result<Vec<DeviceInstance>> {
     sqlx::query_as::<_, DeviceInstance>(
         "SELECT id, plc_id, device_type_id, name, param_values, floor_pos
          FROM device_instances WHERE plc_id = $1 ORDER BY name"
     ).bind(plc_id).fetch_all(pool).await
 }
 
-pub async fn create_instance(pool: &PgPool, req: &CreateDeviceInstance) -> sqlx::Result<DeviceInstance> {
+pub async fn create_device_instance(pool: &PgPool, req: &CreateDeviceInstance) -> sqlx::Result<DeviceInstance> {
     sqlx::query_as::<_, DeviceInstance>(
         "INSERT INTO device_instances (plc_id, device_type_id, name, param_values, floor_pos)
          VALUES ($1, $2, $3, $4, $5)
@@ -172,13 +172,13 @@ pub async fn create_instance(pool: &PgPool, req: &CreateDeviceInstance) -> sqlx:
     .fetch_one(pool).await
 }
 
-pub async fn delete_instance(pool: &PgPool, id: Uuid) -> sqlx::Result<u64> {
+pub async fn delete_device_instance(pool: &PgPool, id: Uuid) -> sqlx::Result<u64> {
     let res = sqlx::query("DELETE FROM device_instances WHERE id = $1")
         .bind(id).execute(pool).await?;
     Ok(res.rows_affected())
 }
 
-pub async fn upsert_instance(
+pub async fn upsert_device_instance(
     pool:           &PgPool,
     plc_id:         Uuid,
     device_type_id: Uuid,

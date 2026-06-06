@@ -15,6 +15,7 @@ mod plant;
 mod api;
 mod db;
 mod assets;
+mod orchestration;
 
 use config_handle::load_all;
 use comms::DiscoveredState;
@@ -67,6 +68,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (ingested, write_handles) =
         plant::start(plant.clone(), app.tick_ms, Arc::clone(&discovered)).await?;
 
+    let write_handles_arc = Arc::new(write_handles);
+    orchestration::start(
+        Arc::clone(&plant),
+        app.tick_ms,
+        Arc::clone(&ingested),
+        Arc::clone(&write_handles_arc),
+    );
+
     let ingested_ws   = ingested.clone();
     let discovered_ws = Arc::clone(&discovered);
     let ws_host       = app.ws_host.clone();
@@ -74,7 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         if let Err(e) = api::ws_bridge::start(
             ingested_ws, plant, app.tick_ms, &ws_host, app.ws_port, log_handle,
-            db_pool, asset_store, discovered_ws, write_handles,
+            db_pool, asset_store, discovered_ws, Arc::clone(&write_handles_arc),
         ).await {
             tracing::error!("WS bridge error: {}", e);
         }

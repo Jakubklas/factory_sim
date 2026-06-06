@@ -4,55 +4,226 @@ use tokio::sync::RwLock;
 use axum::{
     Json,
     Router,
-    extract::{State, Query, WebSocketUpgrade},
+    extract::{Path, State, Query, WebSocketUpgrade},
     extract::ws::{Message, WebSocket},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{delete, get},
 };
 use tower_http::cors::CorsLayer;
 use tracing_subscriber::{EnvFilter, reload};
+use uuid::Uuid;
 use plant_config::{ResolvedPlant, PlantConfig};
+use sqlx::PgPool;
 
+#[allow(unused_imports)]
+use crate::assets::LocalStore;
 use crate::comms::IngestedState;
+use crate::db::{models, queries};
 
 type LogHandle = reload::Handle<EnvFilter, tracing_subscriber::Registry>;
 
 #[derive(Clone)]
 struct AppState {
-    ingested:   Arc<RwLock<IngestedState>>,
-    plant:      Arc<ResolvedPlant>,
-    tick_ms:    u64,
-    log_handle: LogHandle,
+    ingested:    Arc<RwLock<IngestedState>>,
+    plant:       Arc<ResolvedPlant>,
+    tick_ms:     u64,
+    log_handle:  LogHandle,
+    db:          Option<PgPool>,
+    assets:      Arc<LocalStore>,
 }
 
 pub async fn start(
-    ingested:   Arc<RwLock<IngestedState>>,
-    plant:      Arc<ResolvedPlant>,
-    tick_ms:    u64,
-    host:       &str,
-    port:       u16,
-    log_handle: LogHandle,
+    ingested:    Arc<RwLock<IngestedState>>,
+    plant:       Arc<ResolvedPlant>,
+    tick_ms:     u64,
+    host:        &str,
+    port:        u16,
+    log_handle:  LogHandle,
+    db:          Option<PgPool>,
+    assets:      Arc<LocalStore>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState { ingested, plant, tick_ms, log_handle };
+    let state = AppState { ingested, plant, tick_ms, log_handle, db, assets };
 
     let app = Router::new()
+        // Legacy / real-time
         .route("/ws",            get(ws_handler))
         .route("/api/plant",     get(plant_handler))
         .route("/api/log-level", get(log_level_handler))
         .route("/health",        get(health_handler))
+        // Deploy nodes
+        .route("/api/deploy-nodes", get(list_deploy_nodes))
+        // Device types
+        .route("/api/device-types",     get(list_device_types).post(create_device_type))
+        .route("/api/device-types/:id", delete(delete_device_type))
+        // PLCs
+        .route("/api/plcs",     get(list_plcs).post(create_plc))
+        .route("/api/plcs/:id", delete(delete_plc))
+        // Device instances (per PLC)
+        .route("/api/plcs/:plc_id/instances",     get(list_instances).post(create_instance))
+        .route("/api/plcs/:plc_id/instances/:id", delete(delete_instance))
+        // Discovered nodes (per PLC — filled in by Phase 2)
+        .route("/api/plcs/:plc_id/discovered", get(list_discovered))
+        // Wires
+        .route("/api/wires",     get(list_wires).post(create_wire))
+        .route("/api/wires/:id", delete(delete_wire))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
     let addr     = format!("{}:{}", host, port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-
     axum::serve(listener, app).await?;
     Ok(())
 }
 
 // ============================================================================
-// Handlers
+// Helpers
+// ============================================================================
+
+fn db_required(db: &Option<PgPool>) -> Result<&PgPool, (StatusCode, String)> {
+    db.as_ref().ok_or_else(|| (StatusCode::SERVICE_UNAVAILABLE, "DATABASE_URL not configured".into()))
+}
+
+fn db_err(e: sqlx::Error) -> (StatusCode, String) {
+    tracing::error!("DB error: {}", e);
+    (StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
+// ============================================================================
+// Deploy nodes
+// ============================================================================
+
+async fn list_deploy_nodes(State(s): State<AppState>) -> Result<Json<Vec<models::DeployNode>>, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    queries::list_deploy_nodes(pool).await.map(Json).map_err(db_err)
+}
+
+// ============================================================================
+// Device types
+// ============================================================================
+
+async fn list_device_types(State(s): State<AppState>) -> Result<Json<Vec<models::DeviceType>>, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    queries::list_device_types(pool).await.map(Json).map_err(db_err)
+}
+
+async fn create_device_type(
+    State(s): State<AppState>,
+    Json(req): Json<models::CreateDeviceType>,
+) -> Result<(StatusCode, Json<models::DeviceType>), (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    let dt = queries::create_device_type(pool, &req).await.map_err(db_err)?;
+    Ok((StatusCode::CREATED, Json(dt)))
+}
+
+async fn delete_device_type(
+    Path(id): Path<Uuid>,
+    State(s): State<AppState>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    let n = queries::delete_device_type(pool, id).await.map_err(db_err)?;
+    if n == 0 { Err((StatusCode::NOT_FOUND, "not found".into())) } else { Ok(StatusCode::NO_CONTENT) }
+}
+
+// ============================================================================
+// PLCs
+// ============================================================================
+
+async fn list_plcs(State(s): State<AppState>) -> Result<Json<Vec<models::Plc>>, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    queries::list_plcs(pool).await.map(Json).map_err(db_err)
+}
+
+async fn create_plc(
+    State(s): State<AppState>,
+    Json(req): Json<models::CreatePlc>,
+) -> Result<(StatusCode, Json<models::Plc>), (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    let plc = queries::create_plc(pool, &req).await.map_err(db_err)?;
+    Ok((StatusCode::CREATED, Json(plc)))
+}
+
+async fn delete_plc(
+    Path(id): Path<Uuid>,
+    State(s): State<AppState>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    let n = queries::delete_plc(pool, id).await.map_err(db_err)?;
+    if n == 0 { Err((StatusCode::NOT_FOUND, "not found".into())) } else { Ok(StatusCode::NO_CONTENT) }
+}
+
+// ============================================================================
+// Device instances
+// ============================================================================
+
+async fn list_instances(
+    Path(plc_id): Path<Uuid>,
+    State(s): State<AppState>,
+) -> Result<Json<Vec<models::DeviceInstance>>, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    queries::list_instances_for_plc(pool, plc_id).await.map(Json).map_err(db_err)
+}
+
+async fn create_instance(
+    Path(_plc_id): Path<Uuid>,
+    State(s): State<AppState>,
+    Json(req): Json<models::CreateDeviceInstance>,
+) -> Result<(StatusCode, Json<models::DeviceInstance>), (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    let inst = queries::create_instance(pool, &req).await.map_err(db_err)?;
+    Ok((StatusCode::CREATED, Json(inst)))
+}
+
+async fn delete_instance(
+    Path((_plc_id, id)): Path<(Uuid, Uuid)>,
+    State(s): State<AppState>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    let n = queries::delete_instance(pool, id).await.map_err(db_err)?;
+    if n == 0 { Err((StatusCode::NOT_FOUND, "not found".into())) } else { Ok(StatusCode::NO_CONTENT) }
+}
+
+// ============================================================================
+// Discovered nodes
+// ============================================================================
+
+async fn list_discovered(
+    Path(plc_id): Path<Uuid>,
+    State(s): State<AppState>,
+) -> Result<Json<Vec<models::DiscoveredNode>>, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    queries::list_discovered_nodes(pool, plc_id).await.map(Json).map_err(db_err)
+}
+
+// ============================================================================
+// Wires
+// ============================================================================
+
+async fn list_wires(State(s): State<AppState>) -> Result<Json<Vec<models::Wire>>, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    queries::list_wires(pool).await.map(Json).map_err(db_err)
+}
+
+async fn create_wire(
+    State(s): State<AppState>,
+    Json(req): Json<models::CreateWire>,
+) -> Result<(StatusCode, Json<models::Wire>), (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    let wire = queries::create_wire(pool, &req).await.map_err(db_err)?;
+    Ok((StatusCode::CREATED, Json(wire)))
+}
+
+async fn delete_wire(
+    Path(id): Path<Uuid>,
+    State(s): State<AppState>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    let n = queries::delete_wire(pool, id).await.map_err(db_err)?;
+    if n == 0 { Err((StatusCode::NOT_FOUND, "not found".into())) } else { Ok(StatusCode::NO_CONTENT) }
+}
+
+// ============================================================================
+// Legacy / real-time handlers
 // ============================================================================
 
 async fn ws_handler(
@@ -90,9 +261,7 @@ async fn log_level_handler(
             tracing::info!("Log filter changed to: {}", filter_str);
             (StatusCode::OK, format!("filter set to: {}", filter_str))
         }
-        Err(e) => {
-            (StatusCode::BAD_REQUEST, format!("invalid filter '{}': {}", filter_str, e))
-        }
+        Err(e) => (StatusCode::BAD_REQUEST, format!("invalid filter '{}': {}", filter_str, e))
     }
 }
 
@@ -102,9 +271,9 @@ async fn health_handler() -> impl IntoResponse {
 
 async fn stream_state(mut socket: WebSocket, ingested: Arc<RwLock<IngestedState>>, tick_ms: u64) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(tick_ms));
-    let mut log_counter = 0;
-    let log_interval = 10000 / tick_ms; // Log every 10 seconds
-    
+    let mut log_counter = 0u64;
+    let log_interval = 10000 / tick_ms;
+
     loop {
         interval.tick().await;
         log_counter += 1;
@@ -115,13 +284,10 @@ async fn stream_state(mut socket: WebSocket, ingested: Arc<RwLock<IngestedState>
         if socket.send(Message::Text(json.into())).await.is_err() {
             break;
         }
-        
+
         if log_counter >= log_interval {
             log_counter = 0;
-            tracing::info!("[WebSocket] Telemetry update sent to client - {} devices", snapshot.len());
-            for (device_id, fields) in snapshot.iter().take(3) {
-                tracing::info!("[WebSocket]   {}: {:?}", device_id, fields);
-            }
+            tracing::info!("[WebSocket] Telemetry update — {} devices", snapshot.len());
         }
     }
 }

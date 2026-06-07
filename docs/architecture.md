@@ -65,7 +65,7 @@ each section links to the component doc that goes deeper.
 
 ## The uniform tick
 
-This is the heart of the system. Default period **100 ms** (`TICK_MS` / `SIM_TICK_MS`).
+This is the heart of the system. Default period **100 ms** (`BE_TICK_MS` / `SIM_TICK_MS`).
 Three loops run on this clock, each independently:
 
 ```

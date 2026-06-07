@@ -92,6 +92,8 @@ With a database, set `DATABASE_URL` and `SEED_DIR=config`: the backend runs the
 DB is the only source of truth. See [Data model › Seeding](docs/data-model.md#seeding)
 and [Deployment](docs/deployment.md).
 
-**Key environment variables:** `DATABASE_URL`, `SEED_DIR`, `PLANT_CONFIG`, `WS_HOST`/`WS_PORT`,
-`TICK_MS`, `OPCUA_URI_OVERRIDE` (backend); `SIM_PLC_ID`, `BACKEND_URL`, `SIM_TICK_MS`,
-`OPCUA_HOST` (simulator). Details in each component doc.
+**Key environment variables:** `DATABASE_URL`, `SEED_DIR`, `PLANT_CONFIG`, `BE_HOST`/`BE_PORT`
+(default `0.0.0.0:3001`), `BE_TICK_MS`, `OPCUA_URI_OVERRIDE`, `SIMULATOR_IMAGE`, `K8S_NAMESPACE`,
+`ASSET_DIR`, `PKI_DIR` (backend); `SIM_PLC_ID`, `BACKEND_URL`, `SIM_TICK_MS`, `OPCUA_HOST`
+(simulator). Read ad-hoc via `std::env::var` across a few files; only `BE_HOST`/`BE_PORT`/`BE_TICK_MS`
+are centralized (in `AppConfig`). Details in each component doc.

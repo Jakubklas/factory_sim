@@ -1,7 +1,7 @@
 # API reference
 
 Served by the backend ([`api/ws_bridge.rs`](../backend/src/api/ws_bridge.rs)) on
-`WS_HOST:WS_PORT`. CORS is permissive. All `/api/*` data routes require a database;
+`BE_HOST:BE_PORT` (default `0.0.0.0:3001`). CORS is permissive. All `/api/*` data routes require a database;
 without `DATABASE_URL` they return `503`. The frontend uses only `/api/plant` and `/ws`.
 
 Status conventions: `200`/`201` success, `204` on delete, `400` malformed input (e.g. a

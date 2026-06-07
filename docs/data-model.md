@@ -37,13 +37,13 @@ schemaless parts (`param_values`, `floor_pos`, and `io_spec`).
 
 | Table | Holds | Notes |
 |---|---|---|
-| `device_types` | Physics + I/O contract per type. | `io_spec` stores the **full `DeviceTypeDefinition`** JSON so it round-trips back into a Rust struct. |
+| `device_types` | Physics + I/O contract per type. | `io_spec` stores the **full `DeviceTypeDefinition`** JSON so it round-trips back into a Rust struct. `model_ref`/`icon_ref` are reserved for the asset store but **currently unused** (no asset serving yet). |
 | `plcs` | Sim or real PLC. | `plc_id` slug doubles as the k8s deploy name and OPC-UA hostname. |
 | `device_instances` | A type placed on a PLC. | `device_id` slug appears in OPC-UA node paths and `IngestedState` keys. |
 | `wires` | Any output → any input. | `src_device_id`+`src_field` resolve the value; `dst_input_port` + the dest device's path build the write node id. Cross-PLC allowed. |
 | `deploy_nodes` | Cluster nodes. | Kept truthful by node-sync; the PLC builder only offers Ready nodes. |
-| `discovered_nodes` | Cached browse results. | The live cache is in-memory (`DiscoveredState`); this table is the persisted form. |
-| `audit_log` | Before/after per change. | For history / rollback. |
+| `discovered_nodes` | Cached browse results. | **Defined but not yet used at runtime** — the live browse cache is in-memory only (`DiscoveredState`), and `/api/.../discovered` serves from that. This table is reserved for persisting it. |
+| `audit_log` | Before/after per change. | **Defined but not yet written** — reserved for history / rollback; no handler populates it today. |
 
 ---
 

@@ -28,7 +28,7 @@ pub fn start(
             interval.tick().await;
 
             let wires_snapshot    = wires.read().await.clone();
-            let ingested_snapshot = ingested.read().await.clone();
+            let ingested_snapshot = ingested.read().await.clone();          // We could pre-filter for one PLC/device only, but negligible for the current scale.
             let handles_snapshot  = write_handles.read().await;
 
             if wires_snapshot.is_empty() { continue; }

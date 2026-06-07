@@ -79,6 +79,9 @@ pub async fn start(
         // Wires
         .route("/api/wires",     get(list_wires).post(create_wire))
         .route("/api/wires/:id", delete(delete_wire))
+        // Audit log + single-step revert
+        .route("/api/audit",       get(list_audit))
+        .route("/api/revert_step", axum::routing::post(revert_step))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -112,6 +115,8 @@ fn db_err(e: sqlx::Error) -> (StatusCode, String) {
                 StatusCode::CONFLICT,
                 "a record with these unique fields already exists".into(),
             ),
+            // no_data_found — raised by revert_audit() when the step id is unknown.
+            Some("P0002") => return (StatusCode::NOT_FOUND, "audit step not found".into()),
             _ => {}
         }
     }
@@ -358,6 +363,28 @@ async fn delete_wire(
     let pool = db_required(&s.db)?;
     let n = queries::delete_wire(pool, id).await.map_err(db_err)?;
     if n == 0 { Err((StatusCode::NOT_FOUND, "not found".into())) } else { Ok(StatusCode::NO_CONTENT) }
+}
+
+// ============================================================================
+// Audit log — GET /api/audit  ·  POST /api/revert_step
+// ============================================================================
+
+async fn list_audit(
+    Query(params): Query<HashMap<String, String>>,
+    State(s): State<AppState>,
+) -> Result<Json<Vec<models::AuditEntry>>, (StatusCode, String)> {
+    let pool  = db_required(&s.db)?;
+    let limit = params.get("limit").and_then(|l| l.parse::<i64>().ok()).unwrap_or(200).clamp(1, 1000);
+    queries::list_audit(pool, limit).await.map(Json).map_err(db_err)
+}
+
+async fn revert_step(
+    State(s): State<AppState>,
+    Json(req): Json<models::RevertStep>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let pool = db_required(&s.db)?;
+    queries::revert_step(pool, req.audit_id).await.map_err(db_err)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ============================================================================

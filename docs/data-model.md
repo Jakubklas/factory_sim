@@ -43,7 +43,7 @@ schemaless parts (`param_values`, `floor_pos`, and `io_spec`).
 | `wires` | Any output → any input. | `src_device_id`+`src_field` resolve the value; `dst_input_port` + the dest device's path build the write node id. Cross-PLC allowed. |
 | `deploy_nodes` | Cluster nodes. | Kept truthful by node-sync; the PLC builder only offers Ready nodes. |
 | `discovered_plc_nodes` | Cached browse results. | **Defined but not yet used at runtime** — the live browse cache is in-memory only (`DiscoveredState`), and `/api/.../discovered` serves from that. This table is reserved for persisting it. |
-| `audit_log` | Before/after per change. | **Defined but not yet written** — reserved for history / rollback; no handler populates it today. |
+| `audit_log` | Before/after per change. | Populated by a row-level trigger on `device_types`/`plcs`/`device_instances`/`wires`. Drives `GET /api/audit` and `POST /api/revert_step` (single-step undo). See [Audit & revert](#audit--revert). |
 
 ---
 
@@ -91,6 +91,29 @@ preventing orphaned wires from breaking a later plant load.
 | [`0002_schema_additions.sql`](../backend/migrations/0002_schema_additions.sql) | `plc_id`/`protocol`/`endpoint` on `plcs`; `device_id` on instances; typed `src_device_id`/`src_field` on wires (replacing `src_node`); the `plcs` NOTIFY trigger. |
 | [`0003_runtime_fixes.sql`](../backend/migrations/0003_runtime_fixes.sql) | Drops the over-strict `plc_kind_check`; extends NOTIFY to instances+wires; orphan-wire cleanup trigger. |
 | [`0004_natural_keys_and_renames.sql`](../backend/migrations/0004_natural_keys_and_renames.sql) | `device_types.name` becomes the PK (drops UUID `id`); `device_instances` references it via `device_type_name`; renames `model_ref`→`model_3d_ref` and `discovered_nodes`→`discovered_plc_nodes`. |
+| [`0005_audit_triggers.sql`](../backend/migrations/0005_audit_triggers.sql) | `audit_row()` trigger populates `audit_log` on every change to the four authored tables; `revert_audit(id)` undoes one step (backs `POST /api/revert_step`). |
+
+---
+
+## Audit & revert
+
+A generic row-level trigger (`audit_row`, [`0005`](../backend/migrations/0005_audit_triggers.sql))
+writes a before/after snapshot to `audit_log` on every `INSERT`/`UPDATE`/`DELETE` of the four
+authored tables. It's attached per-table with the row's PK column as an argument, so
+`entity_id` is the real key (`name` for `device_types`, `id` for the rest):
+
+```
+  INSERT → before=NULL,  after=row     UPDATE → before=old, after=new
+  DELETE → before=row,   after=NULL
+```
+
+`revert_audit(id)` inverts one step — delete an inserted row, re-insert a deleted one, or
+restore an updated row's old columns **in place** (so reverting a parent doesn't cascade-delete
+children). It uses `jsonb_populate_record(NULL::<table>, before)` to rebuild a typed row from the
+snapshot. The revert is itself a mutation, so it's audited too (and thus undoable); a revert that
+would violate a FK is raised as an error and rolled back. Exposed via
+[api.md › Audit & revert](api.md#audit--revert). Machine-synced tables (`deploy_nodes`,
+`discovered_plc_nodes`) are intentionally **not** audited.
 
 ---
 

@@ -76,3 +76,32 @@ reconcile interval — no restart. See [data-model.md › NOTIFY triggers](data-
 
 > ⚠ Setpoint writes can drive **real** hardware. Range-check and confirm before writing to
 > a real PLC — the backend forwards the write verbatim.
+
+---
+
+## Audit & revert
+
+Every mutation of `device_types`, `plcs`, `device_instances`, and `wires` is recorded in
+`audit_log` by a database trigger (before/after snapshot per row). `revert_step` undoes one
+recorded step. (Machine-synced tables — `deploy_nodes`, `discovered_plc_nodes` — aren't audited.)
+
+| Method · Path | Purpose |
+|---|---|
+| `GET /api/audit?limit=N` | Recent audit entries, newest first (`limit` 1–1000, default 200). |
+| `POST /api/revert_step` | Undo one step by its audit `id`. |
+
+```jsonc
+// GET /api/audit  → [{ id, entity, entity_id, op, before, after, at }, …]
+//   op = "insert" | "update" | "delete"  (derived from before/after)
+
+// POST /api/revert_step   → 204; 404 unknown id; 409 if the undo violates a constraint
+{ "audit_id": 42 }
+```
+
+Revert is the inverse of the recorded op: undo an **insert** → delete the row; undo a
+**delete** → re-insert it verbatim; undo an **update** → restore the old column values
+in place (so reverting a parent row doesn't cascade-delete its children). The revert is
+**itself audited**, so it can be undone too. Reverting a step that would break referential
+integrity (e.g. deleting a device type still in use) is rejected with `409` and rolled back.
+Because the revert mutates the plant tables, it fires the same `plant_changed` NOTIFY — the
+change reaches the runtime with no restart.

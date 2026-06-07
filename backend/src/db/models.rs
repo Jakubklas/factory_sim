@@ -130,3 +130,24 @@ pub struct CreateWire {
     pub dst_instance_id: Uuid,
     pub dst_input_port:  String,
 }
+
+// ============================================================================
+// Audit log
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct AuditEntry {
+    pub id:        i64,
+    pub entity:    String,
+    pub entity_id: String,
+    /// "insert" | "update" | "delete" — derived from before/after.
+    pub op:        String,
+    pub before:    Option<JsonValue>,
+    pub after:     Option<JsonValue>,
+    pub at:        DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RevertStep {
+    pub audit_id: i64,
+}

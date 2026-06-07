@@ -7,7 +7,7 @@ use serde_json::Value;
 
 use super::models::{
     DeployNode, DeviceType, Plc, PlcKind,
-    DeviceInstance, Wire, DiscoveredNode,
+    DeviceInstance, Wire, DiscoveredNode, AuditEntry,
     CreateDeviceType, CreatePlc, CreateDeviceInstance, CreateWire,
 };
 
@@ -300,6 +300,27 @@ pub async fn upsert_discovered_node(pool: &PgPool, node: &DiscoveredNode) -> sql
     .bind(node.plc_id).bind(&node.node_id).bind(&node.browse_path)
     .bind(&node.browse_name).bind(&node.datatype).bind(node.access_level)
     .execute(pool).await?;
+    Ok(())
+}
+
+// ============================================================================
+// audit_log
+// ============================================================================
+
+pub async fn list_audit(pool: &PgPool, limit: i64) -> sqlx::Result<Vec<AuditEntry>> {
+    sqlx::query_as::<_, AuditEntry>(
+        "SELECT id, entity, entity_id,
+                CASE WHEN before IS NULL THEN 'insert'
+                     WHEN after  IS NULL THEN 'delete'
+                     ELSE 'update' END AS op,
+                before, after, at
+         FROM audit_log ORDER BY id DESC LIMIT $1"
+    ).bind(limit).fetch_all(pool).await
+}
+
+/// Undo one recorded step via the revert_audit() SQL function.
+pub async fn revert_step(pool: &PgPool, audit_id: i64) -> sqlx::Result<()> {
+    sqlx::query("SELECT revert_audit($1)").bind(audit_id).execute(pool).await?;
     Ok(())
 }
 

@@ -7,6 +7,17 @@ writes setpoints, serves the API, persists to Postgres, and provisions simulated
 
 ---
 
+## Configuration
+
+Every backend env var is read in **one place** — `AppConfig::from_env`
+([`config_handle/app_config.rs`](../backend/src/config_handle/app_config.rs)) — which declares
+each variable, its default, and its meaning. `main` loads it once into an `Arc<AppConfig>` and
+passes it (or the fields a component needs) down; nothing else calls `std::env::var`. So
+threading config to a connector means adding a field to `AppConfig` and a parameter, not a new
+scattered `env::var`. Full annotated list: [`.env.example`](../.env.example).
+
+---
+
 ## Startup sequence
 
 [`main.rs`](../backend/src/main.rs) wires everything together, then runs until SIGTERM:

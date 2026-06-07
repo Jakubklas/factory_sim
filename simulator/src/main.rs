@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+mod config;
 mod loader;
 mod state;
 mod physics_definitions;
@@ -11,6 +12,7 @@ mod tick;
 mod server;
 mod health;
 
+use config::SimConfig;
 use state::SimulatorState;
 use physics_definitions::PhysicsEngine;
 use tick::tick;
@@ -33,8 +35,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer().with_timer(SecondsTimer))
         .init();
 
-    let tick_ms = loader::tick_ms();
-    let plant   = loader::load().await?;
+    let cfg     = SimConfig::from_env()?;
+    let tick_ms = cfg.tick_ms;
+    let plant   = loader::load(&cfg).await?;
 
     // After slicing, exactly one PLC remains — the one this process owns.
     let plc = plant.config.plcs[0].clone();
@@ -81,11 +84,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Health endpoint for k8s liveness probes — runs on SIM_HEALTH_PORT (default 9000)
-    let health_port: u16 = std::env::var("SIM_HEALTH_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(9000);
-    health::start(health_port);
+    health::start(cfg.health_port);
 
     // Start the OPC-UA server for this process's PLC
     server::plc_server::start_one(
@@ -93,6 +92,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&devices),
         plc,
         tick_ms,
+        cfg.advertise_host.clone(),
+        cfg.pki_dir.clone(),
     ).await?;
 
     tracing::info!("\n  ══ Running — press Ctrl-C or send SIGTERM to stop ══\n");

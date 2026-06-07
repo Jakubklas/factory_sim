@@ -1,4 +1,5 @@
 use plant_config::{ResolvedPlant, DeviceTypeDefinition, loader as pc_loader};
+use crate::config::SimConfig;
 
 /// Load the resolved plant for this simulator process.
 ///
@@ -8,33 +9,23 @@ use plant_config::{ResolvedPlant, DeviceTypeDefinition, loader as pc_loader};
 ///   2. Otherwise: read plant.json + device_types.json from PLANT_CONFIG dir.
 ///
 /// In both cases the result is a ResolvedPlant sliced to exactly one PLC.
-pub async fn load() -> Result<ResolvedPlant, Box<dyn std::error::Error>> {
-    let plc_id = std::env::var("SIM_PLC_ID")
-        .map_err(|_| "SIM_PLC_ID env var not set")?;
-
-    if let Ok(backend_url) = std::env::var("BACKEND_URL") {
-        load_from_api(&backend_url, &plc_id).await
+pub async fn load(cfg: &SimConfig) -> Result<ResolvedPlant, Box<dyn std::error::Error>> {
+    if let Some(backend_url) = &cfg.backend_url {
+        load_from_api(backend_url, &cfg.plc_id).await
     } else {
-        load_from_files(&plc_id)
+        load_from_files(cfg)
     }
-}
-
-/// Read SIM_TICK_MS env var, defaulting to 100ms.
-pub fn tick_ms() -> u64 {
-    std::env::var("SIM_TICK_MS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(100)
 }
 
 // ============================================================================
 // File-based path (backward compat — used when no BACKEND_URL is set)
 // ============================================================================
 
-fn load_from_files(plc_id: &str) -> Result<ResolvedPlant, Box<dyn std::error::Error>> {
-    let config_dir = std::env::var("PLANT_CONFIG")
-        .map_err(|_| "PLANT_CONFIG env var not set (set BACKEND_URL or PLANT_CONFIG)")?;
-    let config_dir = std::path::Path::new(&config_dir);
+fn load_from_files(cfg: &SimConfig) -> Result<ResolvedPlant, Box<dyn std::error::Error>> {
+    let config_dir = cfg.plant_config_dir.as_deref()
+        .ok_or("PLANT_CONFIG env var not set (set BACKEND_URL or PLANT_CONFIG)")?;
+    let plc_id     = &cfg.plc_id;
+    let config_dir = std::path::Path::new(config_dir);
 
     let plant_config = pc_loader::load_plant_config(
         config_dir.join("plant.json").to_str().unwrap()

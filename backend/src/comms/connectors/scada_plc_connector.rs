@@ -44,18 +44,19 @@ enum NodeDataType { Float, Str, Boolean }
 pub struct ScadaPlcConnector {
     endpoint:   String,
     plc_name:   String,
+    pki_dir:    String,
     // Populated by browse(), consumed by poll(). Cleared on reconnect.
     node_reads: Arc<RwLock<Vec<NodeRead>>>,
 }
 
 impl ScadaPlcConnector {
-    pub fn new(endpoint: String, plc_name: String) -> Self {
-        Self { endpoint, plc_name, node_reads: Arc::new(RwLock::new(Vec::new())) }
+    pub fn new(endpoint: String, plc_name: String, pki_dir: String) -> Self {
+        Self { endpoint, plc_name, pki_dir, node_reads: Arc::new(RwLock::new(Vec::new())) }
     }
 
-    pub fn from_endpoint_config(config: plant_config::PlcEndpointConfig) -> (String, Self) {
+    pub fn from_endpoint_config(config: plant_config::PlcEndpointConfig, pki_dir: String) -> (String, Self) {
         let name = config.name.clone();
-        let connector = Self::new(config.url, config.name);
+        let connector = Self::new(config.url, config.name, pki_dir);
         (name, connector)
     }
 }
@@ -65,8 +66,7 @@ impl ConnectorImpl for ScadaPlcConnector {
     type Conn = PlcConnection;
 
     async fn connect(&self) -> Result<PlcConnection, Box<dyn std::error::Error + Send + Sync>> {
-        let base    = std::env::var("PKI_DIR").unwrap_or_else(|_| "./pki".to_string());
-        let pki_dir = std::path::PathBuf::from(base).join("clients").join("scada");
+        let pki_dir = std::path::PathBuf::from(&self.pki_dir).join("clients").join("scada");
 
         let mut client = ClientBuilder::new()
             .application_name("factory-sim-scada")

@@ -103,6 +103,10 @@ pure pass-through.
 
 ## Configuration
 
+All env vars are read in one place — `SimConfig::from_env`
+([`simulator/src/config.rs`](../simulator/src/config.rs)) — loaded once at startup and passed
+down; nothing else calls `std::env::var`. Full annotated list: [`.env.example`](../.env.example).
+
 | Env | Meaning | Default |
 |---|---|---|
 | `SIM_PLC_ID` | which PLC this process owns (required) | — |

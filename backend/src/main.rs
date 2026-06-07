@@ -34,15 +34,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer().with_timer(SecondsTimer))
         .init();
 
-    let app = AppConfig::from_env()?;
+    let app = Arc::new(AppConfig::from_env()?);
 
     // ── Database ───────────────────────────────────────────────────────────────
-    let db_pool = match std::env::var("DATABASE_URL") {
-        Ok(url) => {
+    let db_pool = match &app.database_url {
+        Some(url) => {
             tracing::info!("Connecting to database…");
-            Some(db::connect(&url).await?)
+            Some(db::connect(url).await?)
         }
-        Err(_) => {
+        None => {
             tracing::warn!("DATABASE_URL not set — running without persistence");
             None
         }
@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── Seed (only if SEED_DIR set AND DB is empty) ────────────────────────────
     if let Some(pool) = &db_pool {
-        db::seed::seed_if_configured(pool).await?;
+        db::seed::seed_if_configured(pool, app.seed_dir.as_deref()).await?;
     }
 
     // ── Load plant topology ────────────────────────────────────────────────────
@@ -61,20 +61,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| e.to_string())?;
         Arc::new(plant_config)
     } else {
-        let config_dir = std::env::var("PLANT_CONFIG").unwrap_or_else(|_| "/config".into());
-        tracing::warn!("No DB — falling back to PLANT_CONFIG={}", config_dir);
-        let dir = std::path::Path::new(&config_dir);
+        tracing::warn!("No DB — falling back to PLANT_CONFIG={}", app.plant_config_dir);
+        let dir = std::path::Path::new(&app.plant_config_dir);
         let pc  = plant_config::loader::load_plant_config(dir.join("plant.json").to_str().unwrap())?;
         Arc::new(pc)
     };
 
-    let asset_root  = std::env::var("ASSET_DIR").unwrap_or_else(|_| "/data/assets".into());
-    let asset_store = Arc::new(assets::LocalStore::new(asset_root));
+    let asset_store = Arc::new(assets::LocalStore::new(app.asset_dir.clone()));
     let discovered: Arc<RwLock<DiscoveredState>> = Arc::new(RwLock::new(std::collections::HashMap::new()));
 
     // ── PLC connectors ─────────────────────────────────────────────────────────
-    let (ingested, write_handles) =
-        plant::start(Arc::clone(&plant), app.tick_ms, Arc::clone(&discovered)).await?;
+    let (ingested, write_handles) = plant::start(
+        Arc::clone(&plant), app.tick_ms, Arc::clone(&discovered),
+        app.pki_dir.clone(), app.opcua_uri_override.clone(),
+    ).await?;
 
     // ── Orchestration tick ─────────────────────────────────────────────────────
     let wires = if let Some(pool) = &db_pool {
@@ -103,11 +103,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let disc2       = Arc::clone(&discovered);
         let handles2    = Arc::clone(&write_handles);
         let wires2      = Arc::clone(&wires);
-        let tick_ms     = app.tick_ms;
+        let app2        = Arc::clone(&app);
         let kick2       = Arc::clone(&reconcile_kick);
 
         tokio::spawn(async move {
-            match run_listen_loop(pool2, ingested2, disc2, handles2, wires2, tick_ms, kick2).await {
+            match run_listen_loop(pool2, ingested2, disc2, handles2, wires2, app2, kick2).await {
                 Ok(()) => {},
                 Err(e) => tracing::error!("[listen] Fatal error in LISTEN loop: {}", e),
             }
@@ -129,10 +129,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ── K8s reconciler ─────────────────────────────────────────────────────────
     if let Some(pool) = db_pool.clone() {
-        let sim_image   = std::env::var("SIMULATOR_IMAGE").unwrap_or_else(|_| "factory-sim/simulator:latest".into());
-        let backend_url = std::env::var("BACKEND_SVC_URL").unwrap_or_else(|_| format!("http://backend:{}", app.ws_port));
-        let namespace   = std::env::var("K8S_NAMESPACE").unwrap_or_else(|_| "default".into());
-        k8s::start(pool, sim_image, backend_url, namespace, Arc::clone(&reconcile_kick));
+        k8s::start(
+            pool,
+            app.simulator_image.clone(),
+            app.backend_svc_url.clone(),
+            app.k8s_namespace.clone(),
+            Arc::clone(&reconcile_kick),
+        );
     }
 
     // ── API server ─────────────────────────────────────────────────────────────
@@ -141,10 +144,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ws_host       = app.ws_host.clone();
     let plant_ws      = Arc::clone(&plant);
     let db_pool_ws    = db_pool.clone();
+    let app_ws        = Arc::clone(&app);
 
     tokio::spawn(async move {
         if let Err(e) = api::ws_bridge::start(
-            ingested_ws, plant_ws, app.tick_ms, &ws_host, app.ws_port, log_handle,
+            ingested_ws, plant_ws, app_ws.tick_ms, &ws_host, app_ws.ws_port, log_handle,
             db_pool_ws, asset_store, discovered_ws, Arc::clone(&write_handles),
         ).await {
             tracing::error!("WS bridge error: {}", e);
@@ -165,7 +169,7 @@ async fn run_listen_loop(
     discovered:    Arc<RwLock<DiscoveredState>>,
     write_handles: plant::WriteHandles,
     wires:         Arc<RwLock<Vec<db::plant_loader::OrchestratorWire>>>,
-    tick_ms:       u64,
+    app:           Arc<AppConfig>,
     reconcile_kick: Arc<tokio::sync::Notify>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut listener = sqlx::postgres::PgListener::connect_with(&pool).await?;
@@ -184,10 +188,12 @@ async fn run_listen_loop(
             Ok((plant_config, _)) => {
                 for plc in &plant_config.plcs {
                     plant::add_plc_connector(
-                        plc, tick_ms,
+                        plc, app.tick_ms,
                         Arc::clone(&ingested),
                         Arc::clone(&discovered),
                         Arc::clone(&write_handles),
+                        app.pki_dir.clone(),
+                        app.opcua_uri_override.clone(),
                     ).await;
                 }
             }

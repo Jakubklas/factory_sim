@@ -16,13 +16,10 @@ use super::queries::{
     upsert_deploy_node, upsert_device_type, upsert_plc, upsert_device_instance,
 };
 
-pub async fn seed_if_configured(pool: &PgPool) -> Result<(), Box<dyn std::error::Error>> {
-    let seed_dir = match std::env::var("SEED_DIR") {
-        Ok(d) if !d.is_empty() => d,
-        _ => {
-            tracing::debug!("[seed] SEED_DIR not set — skipping seed");
-            return Ok(());
-        }
+pub async fn seed_if_configured(pool: &PgPool, seed_dir: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(seed_dir) = seed_dir.filter(|d| !d.is_empty()) else {
+        tracing::debug!("[seed] SEED_DIR not set — skipping seed");
+        return Ok(());
     };
 
     // Only seed if the DB is completely empty.

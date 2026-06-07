@@ -11,18 +11,17 @@ use plant_config::{DataType, PlcConfig, ResolvedDevice};
 use crate::state::SimulatorState;
 
 pub async fn start_one(
-    state:   Arc<RwLock<SimulatorState>>,
-    devices: Arc<Vec<ResolvedDevice>>,
-    plc:     PlcConfig,
-    tick_ms: u64,
+    state:          Arc<RwLock<SimulatorState>>,
+    devices:        Arc<Vec<ResolvedDevice>>,
+    plc:            PlcConfig,
+    tick_ms:        u64,
+    advertise_host: String,
+    pki_base:       String,
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Starting OPC-UA server '{}' on port {}", plc.name, plc.port);
 
-    let pki_dir = pki_dir_for_server(&plc.name);
+    let pki_dir = pki_dir_for_server(&plc.name, &pki_base);
     let namespace_uri = format!("urn:factory-sim:{}", plc.plc_id);
-    let advertise_host = std::env::var("OPCUA_HOST")
-        .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "localhost".to_string());
 
     let node_mgr_builder = simple_node_manager(
         NamespaceMetadata { namespace_uri: namespace_uri.clone(), ..Default::default() },
@@ -218,8 +217,7 @@ fn collect_input_specs(devices: &[ResolvedDevice], plc: &PlcConfig, ns: u16) -> 
         .collect()
 }
 
-fn pki_dir_for_server(plc_name: &str) -> std::path::PathBuf {
-    let base = std::env::var("PKI_DIR").unwrap_or_else(|_| "./pki".to_string());
+fn pki_dir_for_server(plc_name: &str, base: &str) -> std::path::PathBuf {
     let safe = plc_name.to_lowercase().replace(' ', "-");
     std::path::PathBuf::from(base).join("servers").join(safe)
 }

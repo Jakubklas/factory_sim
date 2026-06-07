@@ -92,8 +92,10 @@ With a database, set `DATABASE_URL` and `SEED_DIR=config`: the backend runs the
 DB is the only source of truth. See [Data model › Seeding](docs/data-model.md#seeding)
 and [Deployment](docs/deployment.md).
 
-**Key environment variables:** `DATABASE_URL`, `SEED_DIR`, `PLANT_CONFIG`, `BE_HOST`/`BE_PORT`
-(default `0.0.0.0:3001`), `BE_TICK_MS`, `OPCUA_URI_OVERRIDE`, `SIMULATOR_IMAGE`, `K8S_NAMESPACE`,
-`ASSET_DIR`, `PKI_DIR` (backend); `SIM_PLC_ID`, `BACKEND_URL`, `SIM_TICK_MS`, `OPCUA_HOST`
-(simulator). Read ad-hoc via `std::env::var` across a few files; only `BE_HOST`/`BE_PORT`/`BE_TICK_MS`
-are centralized (in `AppConfig`). Details in each component doc.
+**Configuration** is centralized: every environment variable is declared, named, and given a
+default in **one place per binary** — `AppConfig::from_env` ([backend/src/config_handle/app_config.rs](backend/src/config_handle/app_config.rs))
+and `SimConfig::from_env` ([simulator/src/config.rs](simulator/src/config.rs)). Nothing else
+reads `std::env::var`; the structs are loaded once at startup and passed down. See
+[`.env.example`](.env.example) for the full annotated list (copy to `.env` for local dev — the
+`Justfile` auto-loads it). Key vars: `DATABASE_URL`, `SEED_DIR`, `BE_HOST`/`BE_PORT` (default
+`0.0.0.0:3001`), `BE_TICK_MS` (backend); `SIM_PLC_ID`, `BACKEND_URL`, `SIM_TICK_MS` (simulator).

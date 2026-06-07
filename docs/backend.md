@@ -66,7 +66,7 @@ async fn poll  (&self, &Conn) -> Result<PartialState, …>;      // read all bro
 
 ### Browse is the source of truth for reads
 
-`ScadaPlcConnector::browse()` does an iterative BFS from `ObjectsFolder` (depth ≤ 6) over
+`ScadaPlcConnector::browse()` does an iterative BFS (Breadth-First Search) from `ObjectsFolder` (depth ≤ 6) over
 hierarchical references, then batch-reads the `DataType` attribute of every Variable node.
 Each variable's browse path (`PLC/device_id/metric`) is parsed into `device_id` + `field`,
 forming the internal poll list. **Reads never come from config** — only from what was browsed.
@@ -106,11 +106,15 @@ the next tick picks up edits with no restart.
      orchestration::refresh_wires(pool, wires)     ← reload wire table
      plant_loader::load(pool) → for each PLC:
         plant::add_plc_connector(...)              ← start connector if new (idempotent)
+     reconcile_kick.notify_one()                   ← wake the k8s reconciler now
 ```
 
 Triggers fire on `plcs`, `device_instances`, and `wires`
 (see [data-model.md › Triggers](data-model.md#notify-triggers)). `add_plc_connector` is a
-no-op when a connector for that PLC name already exists.
+no-op when a connector for that PLC name already exists. The final `notify_one()` is the
+**reconcile kick** (a shared `tokio::sync::Notify`): it nudges the k8s reconciler so a
+newly-added simulated PLC gets its pod within ~1 s instead of waiting up to its 15 s poll.
+Bursts of edits coalesce to at most one extra reconcile.
 
 ---
 
@@ -121,7 +125,7 @@ It **shells out to `kubectl`** (no `kube` crate dependency); if `kubectl` isn't 
 logs and skips, so the backend runs fine outside a cluster. Two loops:
 
 ```
-  reconcile (15s):  desired = SELECT … FROM plcs WHERE kind='simulated'
+  reconcile (15s OR on kick):  desired = SELECT … FROM plcs WHERE kind='simulated'
                     actual  = kubectl get deployments -l managed-by=factory-sim
                     create missing  → kubectl apply  (Deployment + Service + PVC)
                     delete stale    → kubectl delete
@@ -133,6 +137,12 @@ logs and skips, so the backend runs fine outside a cluster. Two loops:
 Each sim pod is a `ClusterIP` service `plc-<id>:4840`; `nodeSelector` comes from the PLC's
 `deploy_node`. Deleting a deployment lets k8s garbage-collect its ReplicaSet and Pods.
 node-sync keeps `deploy_nodes` truthful so the PLC builder only offers real, Ready targets.
+
+The reconcile is **level-triggered**: it polls because the actual state lives in Kubernetes
+and drifts for reasons Postgres never emits (pod crashes, node loss, manual `kubectl`, a
+failed apply), so each cycle re-asserts desired state and self-heals. The periodic poll is
+the safety net; the LISTEN-loop **kick** above is the fast path for user edits. (node-sync
+must poll regardless — its source is the cluster, not the DB.)
 
 ---
 

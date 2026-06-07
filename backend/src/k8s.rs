@@ -9,7 +9,9 @@
 ///
 /// Also runs a node-sync loop that updates `deploy_nodes` from live k8s node labels.
 use std::collections::HashMap;
+use std::sync::Arc;
 use sqlx::PgPool;
+use tokio::sync::Notify;
 
 const LABEL_MANAGED_BY: &str = "managed-by=factory-sim";
 const RECONCILE_INTERVAL_SECS: u64 = 15;
@@ -23,6 +25,7 @@ pub fn start(
     simulator_image: String,
     backend_url:     String,
     namespace:       String,
+    reconcile_kick:  Arc<Notify>,
 ) {
     if !kubectl_available() {
         tracing::info!("[k8s] kubectl not found — skipping reconciler (not in-cluster?)");
@@ -30,19 +33,24 @@ pub fn start(
     }
     tracing::info!("[k8s] reconciler starting  namespace={}  image={}", namespace, simulator_image);
 
-    // Reconcile loop
+    // Reconcile loop — runs on a fixed interval (the drift-correcting safety net) and
+    // immediately whenever the LISTEN loop kicks it after a plant change.
     {
         let pool2   = pool.clone();
         let ns      = namespace.clone();
         let image   = simulator_image.clone();
         let be_url  = backend_url.clone();
+        let kick    = reconcile_kick;
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(
                 tokio::time::Duration::from_secs(RECONCILE_INTERVAL_SECS)
             );
             loop {
-                interval.tick().await;
+                tokio::select! {
+                    _ = interval.tick() => {},
+                    _ = kick.notified() => tracing::debug!("[k8s] reconcile kicked by plant change"),
+                }
                 if let Err(e) = reconcile(&pool2, &image, &be_url, &ns).await {
                     tracing::warn!("[k8s] reconcile error: {}", e);
                 }

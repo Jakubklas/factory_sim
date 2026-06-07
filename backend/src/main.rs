@@ -91,6 +91,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Arc::clone(&write_handles),
     );
 
+    // Kick handle: lets the LISTEN loop trigger an immediate k8s reconcile on a plant
+    // change instead of waiting up to RECONCILE_INTERVAL_SECS. The periodic reconcile
+    // still runs as the drift-correcting safety net.
+    let reconcile_kick = Arc::new(tokio::sync::Notify::new());
+
     // ── Postgres LISTEN loop ───────────────────────────────────────────────────
     if let Some(pool) = db_pool.clone() {
         let pool2       = pool.clone();
@@ -99,9 +104,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let handles2    = Arc::clone(&write_handles);
         let wires2      = Arc::clone(&wires);
         let tick_ms     = app.tick_ms;
+        let kick2       = Arc::clone(&reconcile_kick);
 
         tokio::spawn(async move {
-            match run_listen_loop(pool2, ingested2, disc2, handles2, wires2, tick_ms).await {
+            match run_listen_loop(pool2, ingested2, disc2, handles2, wires2, tick_ms, kick2).await {
                 Ok(()) => {},
                 Err(e) => tracing::error!("[listen] Fatal error in LISTEN loop: {}", e),
             }
@@ -126,7 +132,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let sim_image   = std::env::var("SIMULATOR_IMAGE").unwrap_or_else(|_| "factory-sim/simulator:latest".into());
         let backend_url = std::env::var("BACKEND_SVC_URL").unwrap_or_else(|_| format!("http://backend:{}", app.ws_port));
         let namespace   = std::env::var("K8S_NAMESPACE").unwrap_or_else(|_| "default".into());
-        k8s::start(pool, sim_image, backend_url, namespace);
+        k8s::start(pool, sim_image, backend_url, namespace, Arc::clone(&reconcile_kick));
     }
 
     // ── API server ─────────────────────────────────────────────────────────────
@@ -160,6 +166,7 @@ async fn run_listen_loop(
     write_handles: plant::WriteHandles,
     wires:         Arc<RwLock<Vec<db::plant_loader::OrchestratorWire>>>,
     tick_ms:       u64,
+    reconcile_kick: Arc<tokio::sync::Notify>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut listener = sqlx::postgres::PgListener::connect_with(&pool).await?;
     listener.listen("plant_changed").await?;
@@ -186,6 +193,11 @@ async fn run_listen_loop(
             }
             Err(e) => tracing::warn!("[listen] Failed to reload plant from DB: {}", e),
         }
+
+        // Nudge the k8s reconciler so a newly-added simulated PLC gets its pod now,
+        // not on the next periodic cycle. Coalesced: a burst of edits (plc + instances
+        // + wires all fire plant_changed) collapses to at most one extra reconcile.
+        reconcile_kick.notify_one();
     }
 }
 

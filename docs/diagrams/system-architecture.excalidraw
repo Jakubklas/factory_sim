@@ -201,7 +201,7 @@
       "y": 204,
       "width": 188,
       "height": 156,
-      "text": "deploy_nodes\ndevice_types\nplcs\ndevice_instances\nwires\ndiscovered_nodes\naudit_log\n\n+ NOTIFY triggers",
+      "text": "deploy_nodes\ndevice_types\nplcs\ndevice_instances\nwires\ndiscovered_plc_nodes\naudit_log\n\n+ NOTIFY triggers",
       "fontSize": 12,
       "fontFamily": 5,
       "textAlign": "left",

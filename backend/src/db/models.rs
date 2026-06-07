@@ -16,12 +16,13 @@ pub struct DeployNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct DeviceType {
-    pub id:           Uuid,
+    /// Natural primary key — also how every other layer identifies a type
+    /// (io_spec.device_type, the physics registry, plant.json, the simulator).
     pub name:         String,
     pub physics_rhai: String,
     /// Stores the full DeviceTypeDefinition JSON for round-trip reconstruction.
     pub io_spec:      JsonValue,
-    pub model_ref:    Option<String>,
+    pub model_3d_ref: Option<String>,
     pub icon_ref:     Option<String>,
     pub updated_at:   DateTime<Utc>,
 }
@@ -51,11 +52,11 @@ pub struct Plc {
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct DeviceInstance {
-    pub id:             Uuid,
-    pub plc_id:         Uuid,
-    pub device_type_id: Uuid,
+    pub id:               Uuid,
+    pub plc_id:           Uuid,
+    pub device_type_name: String,
     /// Short slug like "boiler_001" — used in OPC-UA node paths and IngestedState keys.
-    pub device_id:      Option<String>,
+    pub device_id:        Option<String>,
     pub name:           String,
     pub param_values:   JsonValue,
     pub floor_pos:      Option<JsonValue>,
@@ -93,7 +94,7 @@ pub struct CreateDeviceType {
     pub name:         String,
     pub physics_rhai: Option<String>,
     pub io_spec:      Option<JsonValue>,
-    pub model_ref:    Option<String>,
+    pub model_3d_ref: Option<String>,
     pub icon_ref:     Option<String>,
 }
 
@@ -112,13 +113,13 @@ pub struct CreatePlc {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateDeviceInstance {
-    pub plc_id:         Uuid,
-    pub device_type_id: Uuid,
+    pub plc_id:           Uuid,
+    pub device_type_name: String,
     /// Short slug like "pump_002". Auto-derived from name if omitted.
-    pub device_id:      Option<String>,
-    pub name:           String,
-    pub param_values:   Option<JsonValue>,
-    pub floor_pos:      Option<JsonValue>,
+    pub device_id:        Option<String>,
+    pub name:             String,
+    pub param_values:     Option<JsonValue>,
+    pub floor_pos:        Option<JsonValue>,
 }
 
 #[derive(Debug, Deserialize)]

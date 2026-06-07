@@ -62,8 +62,8 @@ pub async fn start(
         // Deploy nodes
         .route("/api/deploy-nodes", get(list_deploy_nodes))
         // Device types
-        .route("/api/device-types",     get(list_device_types).post(create_device_type))
-        .route("/api/device-types/:id", delete(delete_device_type))
+        .route("/api/device-types",       get(list_device_types).post(create_device_type))
+        .route("/api/device-types/:name", delete(delete_device_type))
         // PLCs
         .route("/api/plcs",     get(list_plcs).post(create_plc))
         .route("/api/plcs/:id", delete(delete_plc))
@@ -147,11 +147,11 @@ async fn create_device_type(
 }
 
 async fn delete_device_type(
-    Path(id): Path<Uuid>,
+    Path(name): Path<String>,
     State(s): State<AppState>,
 ) -> Result<StatusCode, (StatusCode, String)> {
     let pool = db_required(&s.db)?;
-    let n = queries::delete_device_type(pool, id).await.map_err(db_err)?;
+    let n = queries::delete_device_type(pool, &name).await.map_err(db_err)?;
     if n == 0 { Err((StatusCode::NOT_FOUND, "not found".into())) } else { Ok(StatusCode::NO_CONTENT) }
 }
 

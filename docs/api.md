@@ -33,7 +33,7 @@ WebSocket frame shape (`device_id → field → value`):
 
 | Method · Path | Purpose |
 |---|---|
-| `GET / POST /api/device-types` · `DELETE /api/device-types/:id` | Device-type library. |
+| `GET / POST /api/device-types` · `DELETE /api/device-types/:name` | Device-type library (keyed by `name`). |
 | `GET / POST /api/plcs` · `DELETE /api/plcs/:id` | PLCs (sim or real). |
 | `GET / POST /api/plcs/:plc_id/instances` · `DELETE /api/plcs/:plc_id/instances/:id` | Device instances on a PLC. |
 | `GET / POST /api/wires` · `DELETE /api/wires/:id` | Wires (any output → any input). |
@@ -47,7 +47,7 @@ Slugs (`plc_id`, `device_id`) auto-derive from `name` if omitted. Examples:
 { "name": "Bypass PLC", "kind": "simulated", "deploy_node": "pi" }
 
 // POST /api/plcs/:plc_id/instances
-{ "plc_id": "<uuid>", "device_type_id": "<uuid>", "name": "Main Boiler",
+{ "plc_id": "<uuid>", "device_type_name": "Boiler", "name": "Main Boiler",
   "param_values": { "ramp_rate": 2.0, "max": 150.0 } }
 
 // POST /api/wires   — boiler_001.pressure → this instance's "inlet_pressure" input

@@ -19,16 +19,16 @@ in [`backend/migrations/`](../backend/migrations/) (sqlx migrations, applied at 
     id PK · plc_id(slug) · name · kind('simulated'|'real') · deploy_node · endpoint_uri
           · port · protocol · endpoint
         ▲                                   ▲
-        │ plc_id (FK, CASCADE)              │ device_type_id (FK)
+        │ plc_id (FK, CASCADE)              │ device_type_name (FK, CASCADE on rename / RESTRICT on delete)
   device_instances                  a device_type placed on a PLC, with params
-    id PK · plc_id · device_type_id · device_id(slug) · name · param_values(jsonb) · floor_pos
+    id PK · plc_id · device_type_name · device_id(slug) · name · param_values(jsonb) · floor_pos
         ▲                                   │
         │ dst_instance_id (FK, CASCADE)     │
   wires                             upstream output → downstream input port
     id PK · src_plc_id · src_device_id · src_field · dst_instance_id · dst_input_port
 
-  device_types     id PK · name · physics_rhai · io_spec(jsonb) · model_ref · icon_ref
-  discovered_nodes (plc_id,node_id) PK · browse_path · browse_name · datatype · access_level
+  device_types     name PK · physics_rhai · io_spec(jsonb) · model_3d_ref · icon_ref
+  discovered_plc_nodes (plc_id,node_id) PK · browse_path · browse_name · datatype · access_level
   audit_log        id PK · entity · entity_id · before(jsonb) · after(jsonb) · at
 ```
 
@@ -37,12 +37,12 @@ schemaless parts (`param_values`, `floor_pos`, and `io_spec`).
 
 | Table | Holds | Notes |
 |---|---|---|
-| `device_types` | Physics + I/O contract per type. | `io_spec` stores the **full `DeviceTypeDefinition`** JSON so it round-trips back into a Rust struct. `model_ref`/`icon_ref` are reserved for the asset store but **currently unused** (no asset serving yet). |
+| `device_types` | Physics + I/O contract per type. | **`name` is the primary key** — the same identifier the whole system uses (`io_spec.device_type`, the physics registry, `plant.json`, the simulator). `io_spec` stores the **full `DeviceTypeDefinition`** JSON so it round-trips back into a Rust struct. `model_3d_ref`/`icon_ref` are reserved for the asset store but **currently unused** (no asset serving yet). |
 | `plcs` | Sim or real PLC. | `plc_id` slug doubles as the k8s deploy name and OPC-UA hostname. |
-| `device_instances` | A type placed on a PLC. | `device_id` slug appears in OPC-UA node paths and `IngestedState` keys. |
+| `device_instances` | A type placed on a PLC. | References its type by `device_type_name` (FK → `device_types.name`, `ON UPDATE CASCADE` so a rename follows, `ON DELETE RESTRICT` so an in-use type can't be deleted). `device_id` slug appears in OPC-UA node paths and `IngestedState` keys. |
 | `wires` | Any output → any input. | `src_device_id`+`src_field` resolve the value; `dst_input_port` + the dest device's path build the write node id. Cross-PLC allowed. |
 | `deploy_nodes` | Cluster nodes. | Kept truthful by node-sync; the PLC builder only offers Ready nodes. |
-| `discovered_nodes` | Cached browse results. | **Defined but not yet used at runtime** — the live browse cache is in-memory only (`DiscoveredState`), and `/api/.../discovered` serves from that. This table is reserved for persisting it. |
+| `discovered_plc_nodes` | Cached browse results. | **Defined but not yet used at runtime** — the live browse cache is in-memory only (`DiscoveredState`), and `/api/.../discovered` serves from that. This table is reserved for persisting it. |
 | `audit_log` | Before/after per change. | **Defined but not yet written** — reserved for history / rollback; no handler populates it today. |
 
 ---
@@ -90,6 +90,7 @@ preventing orphaned wires from breaking a later plant load.
 | [`0001_initial_schema.sql`](../backend/migrations/0001_initial_schema.sql) | All tables, the `plc_kind` enum, indexes. |
 | [`0002_schema_additions.sql`](../backend/migrations/0002_schema_additions.sql) | `plc_id`/`protocol`/`endpoint` on `plcs`; `device_id` on instances; typed `src_device_id`/`src_field` on wires (replacing `src_node`); the `plcs` NOTIFY trigger. |
 | [`0003_runtime_fixes.sql`](../backend/migrations/0003_runtime_fixes.sql) | Drops the over-strict `plc_kind_check`; extends NOTIFY to instances+wires; orphan-wire cleanup trigger. |
+| [`0004_natural_keys_and_renames.sql`](../backend/migrations/0004_natural_keys_and_renames.sql) | `device_types.name` becomes the PK (drops UUID `id`); `device_instances` references it via `device_type_name`; renames `model_ref`→`model_3d_ref` and `discovered_nodes`→`discovered_plc_nodes`. |
 
 ---
 

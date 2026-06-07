@@ -47,9 +47,8 @@ async fn load_impl(
     }
 
     let inst_rows = sqlx::query_as::<_, InstRow>(
-        "SELECT di.plc_id, di.device_id, di.name, dt.name AS dt_name, di.param_values
+        "SELECT di.plc_id, di.device_id, di.name, di.device_type_name AS dt_name, di.param_values
          FROM device_instances di
-         JOIN device_types dt ON dt.id = di.device_type_id
          ORDER BY di.name"
     ).fetch_all(pool).await?;
 
@@ -241,9 +240,9 @@ pub async fn load_plc_config(
     }
 
     let inst_rows = sqlx::query_as::<_, InstRow>(
-        "SELECT di.device_id, di.name, dt.name AS dt_name, di.param_values, dt.io_spec
+        "SELECT di.device_id, di.name, di.device_type_name AS dt_name, di.param_values, dt.io_spec
          FROM device_instances di
-         JOIN device_types dt ON dt.id = di.device_type_id
+         JOIN device_types dt ON dt.name = di.device_type_name
          WHERE di.plc_id = $1
          ORDER BY di.name"
     ).bind(plc_uuid).fetch_all(pool).await?;

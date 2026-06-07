@@ -129,20 +129,19 @@ async fn seed_plcs_and_instances(pool: &PgPool, dir: &Path) -> Result<(), Box<dy
         tracing::debug!("[seed] plc: {} ({})", plc.name, db_plc.id);
 
         for dev in &plc.devices {
-            let dt = super::queries::get_device_type_by_name(pool, &dev.device_type).await?;
-            let Some(dt) = dt else {
+            if super::queries::get_device_type_by_name(pool, &dev.device_type).await?.is_none() {
                 tracing::warn!(
                     "[seed] Device '{}' references unknown type '{}' — skipping",
                     dev.name, dev.device_type
                 );
                 continue;
-            };
+            }
 
             let param_values = serde_json::to_value(&dev.params)?;
             let inst = upsert_device_instance(
                 pool,
                 db_plc.id,
-                dt.id,
+                &dev.device_type,
                 &dev.device_id,
                 &dev.name,
                 param_values,

@@ -1,6 +1,6 @@
 # ── Stage 1: build ───────────────────────────────────────────────────────────
 # Always runs on the CI host's native arch (amd64). Cross-compiles to TARGETARCH.
-FROM --platform=$BUILDPLATFORM rust:1.87-slim AS builder
+FROM --platform=$BUILDPLATFORM rust:1.88-slim AS builder
 
 ARG TARGETARCH
 

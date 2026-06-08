@@ -9,6 +9,7 @@ use opcua::server::diagnostics::NamespaceMetadata;
 use opcua::types::{DataValue, NodeId, NumericRange, StatusCode, Variant};
 use plant_config::{DataType, PlcConfig, ResolvedDevice};
 use crate::state::SimulatorState;
+use crate::stats::SimStats;
 
 pub async fn start_one(
     state:          Arc<RwLock<SimulatorState>>,
@@ -17,6 +18,7 @@ pub async fn start_one(
     tick_ms:        u64,
     advertise_host: String,
     pki_base:       String,
+    stats:          Arc<SimStats>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Starting OPC-UA server '{}' on port {}", plc.name, plc.port);
 
@@ -98,6 +100,7 @@ pub async fn start_one(
     for ispec in &input_specs {
         let node_id   = NodeId::new(ns, ispec.node_path.clone());
         let state_cb  = Arc::clone(&state);
+        let stats_cb  = Arc::clone(&stats);
         let device_id = ispec.device_id.clone();
         let input_nm  = ispec.input_name.clone();
 
@@ -110,6 +113,8 @@ pub async fn start_one(
                 Variant::String(s)  => DataType::Str(s.into()),
                 _                   => return StatusCode::BadTypeMismatch,
             };
+
+            stats_cb.record_write();
 
             let state_clone  = Arc::clone(&state_cb);
             let device_clone = device_id.clone();

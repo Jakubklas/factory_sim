@@ -3,10 +3,20 @@ use plant_config::{PhysicsMode, ResolvedDevice};
 use crate::physics_definitions::PhysicsEngine;
 use crate::state::SimulatorState;
 
+/// Per-tick outcome counts, fed into the periodic stats summary.
+#[derive(Default)]
+pub struct TickCounts {
+    pub computed: u32, // devices whose physics ran
+    pub skipped:  u32, // devices skipped by the readiness gate
+    pub errors:   u32, // physics errors
+}
+
 /// Run one Jacobi tick:
 ///   1. Freeze the previous-tick snapshot — all devices read from it, not from live state.
 ///   2. Compute every device's new state from the frozen snapshot (order-independent).
 ///   3. Commit all computed states atomically (from the next tick's perspective).
+///
+/// Returns per-device outcome counts for the stats summary.
 ///
 /// Consequences:
 ///   - No topo-sort needed: processing order within a tick is irrelevant.
@@ -20,7 +30,9 @@ pub fn tick(
     devices: &[ResolvedDevice],
     physics: &PhysicsEngine,
     dt:      f64,
-) {
+) -> TickCounts {
+    let mut counts = TickCounts::default();
+
     // 1. Frozen snapshot — previous-tick values only.
     let snapshot = state.snapshot();
 
@@ -44,6 +56,7 @@ pub fn tick(
         });
 
         if !ready {
+            counts.skipped += 1;
             tracing::trace!(
                 "Device '{}' skipped — waiting for inputs: {:?}",
                 device_id,
@@ -61,10 +74,12 @@ pub fn tick(
             &device.config.params,
             dt,
         ) {
+            counts.errors += 1;
             tracing::warn!("Physics error on '{}': {}", device_id, e);
             continue;
         }
 
+        counts.computed += 1;
         new_states.insert(device_id.clone(), device_state);
     }
 
@@ -72,4 +87,6 @@ pub fn tick(
     for (device_id, new_state) in new_states {
         state.set_device_state(&device_id, new_state);
     }
+
+    counts
 }

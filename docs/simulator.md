@@ -101,6 +101,25 @@ pure pass-through.
 
 ---
 
+## Periodic summary
+
+Every **10 s** the simulator logs a one-block summary — running counters plus the current value
+of every device field — mirroring the backend connector summary so the two read alike. Counters
+live in `SimStats` ([`stats.rs`](../simulator/src/stats.rs)): the tick loop feeds it per-tick
+outcome counts (`tick()` returns `TickCounts`), and the OPC-UA write callback bumps `writes-in`.
+
+```
+  ── Heating PLC ─────────────────────────────────────
+  uptime 120s · ticks 1200 (10.0/s) · physics 2400 · skipped 0 · errors 0 · writes-in 35
+  boiler_001   pressure=3.00  status=Heating  target_temperature=100.00  temperature=84.20
+  valve_001    inlet_pressure=3.00  outlet_pressure=2.80  position=0.41  status=Open
+```
+
+`physics` = device-physics executions, `skipped` = devices held by the readiness gate, `errors`
+= physics errors, `writes-in` = OPC-UA input writes received from the backend.
+
+---
+
 ## Configuration
 
 All env vars are read in one place — `SimConfig::from_env`

@@ -6,7 +6,7 @@ use opcua::server::{
     address_space::{Variable, VariableBuilder},
 };
 use opcua::server::diagnostics::NamespaceMetadata;
-use opcua::types::{DataValue, NodeId, NumericRange, StatusCode, Variant};
+use opcua::types::{DataTypeId, DataValue, NodeId, NumericRange, StatusCode, Variant};
 use plant_config::{DataType, PlcConfig, ResolvedDevice};
 use crate::state::SimulatorState;
 use crate::stats::SimStats;
@@ -63,11 +63,21 @@ pub async fn start_one(
         let plc_folder_id = NodeId::new(ns, format!("folder/{}", plc.name));
         as_.add_folder(&plc_folder_id, &plc.name, &plc.name, &NodeId::objects_folder_id());
 
-        // Output metric nodes (read-only)
+        // One folder per device — created exactly once (a device may have both output
+        // metrics and input ports; re-adding the same folder errors in this opcua version).
+        let mut device_ids: Vec<&str> = node_specs.iter().map(|s| s.device_id.as_str())
+            .chain(input_specs.iter().map(|s| s.device_id.as_str()))
+            .collect();
+        device_ids.sort();
+        device_ids.dedup();
+        for did in &device_ids {
+            let device_folder_id = NodeId::new(ns, format!("folder/{}/{}", plc.name, did));
+            as_.add_folder(&device_folder_id, *did, *did, &plc_folder_id);
+        }
+
+        // Output metric nodes (read-only). Variable::new infers the DataType from the value.
         for spec in &node_specs {
             let device_folder_id = NodeId::new(ns, format!("folder/{}/{}", plc.name, spec.device_id));
-            as_.add_folder(&device_folder_id, &spec.device_id, &spec.device_id, &plc_folder_id);
-
             let node_id = NodeId::new(ns, spec.node_path.clone());
             let var = match &spec.initial_value {
                 DataType::Float(f)   => Variable::new(&node_id, &spec.metric_name, &spec.metric_name, *f),
@@ -78,15 +88,14 @@ pub async fn start_one(
         }
 
         // Writable input port nodes — the backend writes these each tick to deliver wired values.
-        // Node path: "{plc_name}.{device_id}.{input_name}" (same namespace as output metrics)
+        // Node path: "{plc_name}.{device_id}.{input_name}" (same namespace as output metrics).
+        // The explicit .data_type() is required: VariableBuilder::build() panics on a node with
+        // a null DataType, and .value() alone doesn't set it (unlike Variable::new above).
         for ispec in &input_specs {
             let device_folder_id = NodeId::new(ns, format!("folder/{}/{}", plc.name, ispec.device_id));
-            // Folder already created by the output loop above (same device_id).
-            // If the device has no output metrics it may be missing — re-add is a no-op.
-            as_.add_folder(&device_folder_id, &ispec.device_id, &ispec.device_id, &plc_folder_id);
-
             let node_id = NodeId::new(ns, ispec.node_path.clone());
             let var = VariableBuilder::new(&node_id, &ispec.input_name, &ispec.input_name)
+                .data_type(DataTypeId::Double)
                 .value(0.0_f64)
                 .writable()
                 .build();
